@@ -130,7 +130,7 @@ tp = transformation_pipelines()
 # %%
 tp.define_w2v_pipeline(W2V_ALPHA, W2V_ITER, W2V_EMBEDDING_DIM,
                        W2V_HS, W2V_SG, W2V_MIN_COUNT, W2V_WORKERS)
-w2v = tp.fitsave_w2v_pipeline(SAVE_PATH, profiles_train, W2V_EMBEDDING_DIM, SEQUENCE_LENGTH)
+w2v = tp.fitsave_w2v_pipeline(SAVE_PATH, profiles_train, W2V_EMBEDDING_DIM)
 if EXPORT_W2V_EMBEDDINGS:
     tp.export_w2v_embeddings(SAVE_PATH, definitions_dict=definitions)
 
