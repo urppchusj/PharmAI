@@ -28,18 +28,18 @@ from components import (TransformedGenerator, check_ipynb, data,
 # %%
 # Save path
 
-SAVE_DIR = '20190824-0945'
+SAVE_DIR = 'retrospective/20190824-1409'
 SAVE_PATH = os.path.join('experiments', SAVE_DIR)
 
 # %%
 # Load parameters
 
-with open(os.path.join(SAVE_DIR, 'hp.pkl'), mode='rb') as file:
+with open(os.path.join(SAVE_PATH, 'hp.pkl'), mode='rb') as file:
     mode, data_dir, batch_size, sequence_length, n_training_steps_per_epoch, n_validation_steps_per_epoch = pickle.load(
         file)
 
-with open(os.path.join(SAVE_DIR, 'done_epochs.pkl'), mode='rb') as file:
-    initial_epoch = pickle.load(file)
+with open(os.path.join(SAVE_PATH, 'done_epochs.pkl'), mode='rb') as file:
+    initial_epoch = pickle.load(file) + 1
 
 # %%
 # Check if running inside Jupyter notebook or not (will be used later for Keras progress bars)
