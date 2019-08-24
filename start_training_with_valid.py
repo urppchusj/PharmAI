@@ -70,11 +70,11 @@ N_LSTM = 0
 N_PSE_DENSE = 0
 N_DENSE = 2
 
-LSTM_SIZE = 256
-DENSE_PSE_SIZE = 128
-CONCAT_LSTM_SIZE = 256
-CONCAT_TOTAL_SIZE = 256
-DENSE_SIZE = 64
+LSTM_SIZE = 512
+DENSE_PSE_SIZE = 256
+CONCAT_LSTM_SIZE = 512
+CONCAT_TOTAL_SIZE = 512
+DENSE_SIZE = 128
 DROPOUT = 0.3
 L2_REG = 0
 SEQUENCE_LENGTH = 30
@@ -132,10 +132,10 @@ if EXPORT_W2V_EMBEDDINGS:
 # Encode the profile state, either as a multi-hot vector (binary count vectorizer) or using Latent Semantic Indexing
 
 # %%
-tp.define_pse_pipeline(use_lsi=USE_LSI, tsvd_n_components=TSVD_N_COMPONENTS)
 # Prepare the data before fitting
 pse_data = tp.prepare_pse_data(
     active_meds_train, active_classes_train, depa_train)
+tp.define_pse_pipeline(use_lsi=USE_LSI, tsvd_n_components=TSVD_N_COMPONENTS)
 pse, pse_shape = tp.fitsave_pse_pipeline(SAVE_PATH, pse_data)
 
 # %% [markdown]
