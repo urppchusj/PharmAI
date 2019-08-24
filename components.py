@@ -288,7 +288,7 @@ class transformation_pipelines:
         pse_data = [[am, ac, de] for am, ac, de in zip(
             active_meds, active_classes, departments)]
         self.n_pse_columns = len(pse_data[0])
-        return pse_data, self.n_pse_columns
+        return pse_data
 
     # Define the profile state encoder pipeline, encode as multihot if use_lsi
     # is false and perform latent semantic indexing (decomposed into tfidf and
@@ -401,7 +401,7 @@ class TransformedGenerator(keras.utils.Sequence):
         if self.mode == 'prospective':
             w2v_pre_namestring = 'w2v_input'
         elif self.mode == 'retrospective':
-            w2v_pre_namestring = 'retrospective'
+            w2v_pre_namestring = 'w2v_pre_input'
         X[w2v_pre_namestring] = transformed_w2v_pre
         # Compute post sequences only in retrospective mode
         if self.mode == 'retrospective':
