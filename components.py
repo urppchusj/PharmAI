@@ -340,8 +340,8 @@ class transformation_pipelines:
     def fitsave_labelencoder(self, save_path, targets):
         le = LabelEncoder()
         le.fit(targets)
-        joblib.dump(le, os.path.join(save_path, 'le.joblib'))
         output_n_classes = len(le.classes_)
+        joblib.dump((le, output_n_classes), os.path.join(save_path, 'le.joblib'))
         return le, output_n_classes
 
 
