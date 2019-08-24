@@ -69,19 +69,28 @@ N_PSE_DENSE = 0
 N_DENSE = 2
 
 LSTM_SIZE = 512
-DENSE_PSE_SIZE = 256
-CONCAT_LSTM_SIZE = 512
-CONCAT_TOTAL_SIZE = 512
-DENSE_SIZE = 128
+DENSE_PSE_SIZE = 512
+CONCAT_LSTM_SIZE = 1024
+CONCAT_TOTAL_SIZE = 1024
+DENSE_SIZE = 256
 DROPOUT = 0.3
 L2_REG = 0
 SEQUENCE_LENGTH = 30
 BATCH_SIZE = 256
 
+N_TRAINING_STEPS_PER_EPOCH = 1000
+N_VALIDATIONS_STEPS_PER_EPOCH = 1000
+
 # %%
 # Check if running inside Jupyter notebook or not (will be used later for Keras progress bars)
 
 in_ipynb = check_ipynb().is_inipynb()
+
+# %% [markdown]
+# Save parameters
+
+with open(os.path.join(SAVE_PATH, 'hp.pkl'), mode='wb') as file:
+    pickle.dump((MODE, DATA_DIR, BATCH_SIZE, SEQUENCE_LENGTH, N_TRAINING_STEPS_PER_EPOCH, N_VALIDATIONS_STEPS_PER_EPOCH), file)
 
 # %% [markdown]
 # ## Data
@@ -179,10 +188,10 @@ else:
 
 model.fit_generator(train_generator,
                     epochs=1000,
-                    steps_per_epoch=1000,
+                    steps_per_epoch=N_TRAINING_STEPS_PER_EPOCH,
                     callbacks=callbacks,
                     validation_data=test_generator,
-                    validation_steps=1000,
+                    validation_steps=N_VALIDATIONS_STEPS_PER_EPOCH,
                     verbose=verbose)
 
 model.save(os.path.join(SAVE_PATH, 'model.h5'))

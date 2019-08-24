@@ -239,13 +239,13 @@ class transformation_pipelines:
 
     # Fit the pipeline, normalize the embeddings and save the
     # pipeline as well as required values to proprely load and use.
-    def fitsave_w2v_pipeline(self, save_path, profiles_train, w2v_embedding_dim, sequence_length):
+    def fitsave_w2v_pipeline(self, save_path, profiles_train, w2v_embedding_dim):
         print('Fitting word2vec embeddings...')
         self.w2v.fit(profiles_train)
         # Normalize the embeddings
         self.w2v.named_steps['w2v'].gensim_model.init_sims(replace=True)
         # save the fitted word2vec pipe
-        joblib.dump((w2v_embedding_dim, sequence_length, self.w2v),
+        joblib.dump((w2v_embedding_dim, self.w2v),
                     os.path.join(save_path, 'w2v.joblib'))
         return self.w2v
 
@@ -324,7 +324,7 @@ class transformation_pipelines:
         else:
             pse_shape = tsvd_n_components
         # save the fitted profile state encoder
-        joblib.dump((self.use_lsi, pse_shape, self.pse),
+        joblib.dump((self.use_lsi, pse_shape, self.pse, self.pse_pp, self.pse_a),
                     os.path.join(save_path, 'pse.joblib'))
         return self.pse, pse_shape
 
@@ -469,7 +469,7 @@ class neural_network:
         return (sparse_top_k_categorical_accuracy(y_true, y_pred, k=30))
 
     # Callbacks during training
-    def callbacks(self, save_path, callback_mode='train_with_valid', n_done_epochs=0):
+    def callbacks(self, save_path, callback_mode='train_with_valid'):
 
         # Assign simple names
         CSVLogger = keras.callbacks.CSVLogger
@@ -481,6 +481,7 @@ class neural_network:
         # Define the callbacks
         callbacks = []
 
+        callbacks.append(EpochLoggerCallback(save_path))
         # Train with valid and cross-val callbacks
         if callback_mode == 'train_with_valid' or callback_mode == 'cross_val':
             callbacks.append(ReduceLROnPlateau(
@@ -495,7 +496,6 @@ class neural_network:
                 save_path, 'training_history.csv'), append=True))
         if callback_mode == 'train_no_valid':
             callbacks.append(LearningRateScheduler(self.schedule, verbose=1))
-            callbacks.append(EpochLoggerCallback(save_path, n_done_epochs))
         return callbacks
 
     def schedule(self, i, cur_lr):
@@ -616,12 +616,11 @@ class EpochLoggerCallback(keras.callbacks.Callback):
     total epochs
     '''
 
-    def __init__(self, save_path, n_done_epochs=0):
+    def __init__(self, save_path):
         self.save_path = save_path
-        self.starting_epoch = n_done_epochs
 
     def on_epoch_end(self, epoch, logs=None):
-        self.done_epochs = self.starting_epoch + epoch
+        self.done_epochs = epoch
         with open(os.path.join(self.save_path, 'done_epochs.pkl'), mode='wb') as file:
             pickle.dump(self.done_epochs, file)
 
