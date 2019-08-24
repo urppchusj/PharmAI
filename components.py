@@ -1,13 +1,21 @@
 import os
-import pathlib
 import pickle
 import random
 
+import gensim.utils as gsu
+import joblib
 import numpy as np
 import pandas as pd
 import seaborn as sns
+from gensim.matutils import Sparse2Corpus
+from gensim.models import KeyedVectors
+from gensim.sklearn_api import LsiTransformer, W2VTransformer
 from matplotlib import pyplot as plt
+from sklearn.compose import ColumnTransformer
+from sklearn.feature_extraction.text import CountVectorizer, TfidfTransformer
 from sklearn.model_selection import train_test_split
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import FunctionTransformer, LabelEncoder
 from tensorflow import keras, test
 
 
@@ -61,7 +69,7 @@ class data:
         self.enc_file = os.path.join(
             os.getcwd(), 'preprocessed_data', self.mode, datadir, 'enc_list.pkl')
 
-    def load_data(self, restrict_data=False, restrict_sample_size=None, previous_encs_path=False, get_profiles=True, get_definitions=True):
+    def load_data(self, restrict_data=False, save_path=None, restrict_sample_size=None, previous_encs_path=False, get_profiles=True, get_definitions=True):
 
         # This allows to prevent loading profiles for nothing when
         # resuming training and word2vec embeddings do not need
@@ -108,6 +116,8 @@ class data:
                 restrict_sample_size))
             self.enc = [self.enc[i] for i in sorted(
                 random.sample(range(len(self.enc)), restrict_sample_size))]
+            with open(os.path.join(save_path, 'sampled_encs.pkl'), mode='wb') as file:
+                pickle.dump(self.enc, file)
 
         if get_definitions:
             # Build a dict mapping drug ids to their names
@@ -209,18 +219,130 @@ class data:
         return self.profiles_train, self.targets_train, self.pre_seq_train, self.post_seq_train, self.active_meds_train, self.active_classes_train, self.depa_train, self.targets_val, self.pre_seq_val, self.post_seq_val, self.active_meds_val, self.active_classes_val, self.depa_val, self.definitions
 
 
-class pse_helper_functions:
+class transformation_pipelines:
+
+    '''
+    Scikit-learn data transformation pipelines that take the preprocessed
+    data as inputs and transform them into appropriate representations
+    for the neural network
+    '''
 
     def __init__(self):
         pass
 
-    # preprocessor (join the strings with spaces to simulate a text)
+    # Define the word2vec pipeline
+    def define_w2v_pipeline(self, alpha, iter, embedding_dim, hs, sg, min_count, workers):
+        self.w2v = Pipeline([
+            ('w2v', W2VTransformer(alpha=alpha, iter=iter, size=embedding_dim,
+                                   hs=hs, sg=sg, min_count=min_count, workers=workers)),
+        ])
+
+    # Fit the pipeline, normalize the embeddings and save the
+    # pipeline as well as required values to proprely load and use.
+    def fitsave_w2v_pipeline(self, save_path, profiles_train, w2v_embedding_dim, sequence_length):
+        print('Fitting word2vec embeddings...')
+        self.w2v.fit(profiles_train)
+        # Normalize the embeddings
+        self.w2v.named_steps['w2v'].gensim_model.init_sims(replace=True)
+        # save the fitted word2vec pipe
+        joblib.dump((w2v_embedding_dim, sequence_length, self.w2v),
+                    os.path.join(save_path, 'w2v.joblib'))
+        return self.w2v
+
+    # Export the word2vec embeddings with associated metadata to
+    # visualize or perform other tasks with the embeddings alone.
+    def export_w2v_embeddings(self, save_path, definitions_dict=None):
+        print('Exporting word2vec embeddings...')
+        self.w2v.named_steps['w2v'].gensim_model.wv.save_word2vec_format(
+            os.path.join(save_path, 'w2v.model'))
+        model = KeyedVectors.load_word2vec_format(
+            os.path.join(save_path, 'w2v.model'), binary=False)
+        outfiletsv = os.path.join(save_path, 'w2v_embeddings.tsv')
+        outfiletsvmeta = os.path.join(save_path, 'w2v_metadata.tsv')
+
+        with open(outfiletsv, 'w+') as file_vector:
+            with open(outfiletsvmeta, 'w+') as file_metadata:
+                for word in model.index2word:
+                    file_metadata.write(gsu.to_utf8(word).decode(
+                        'utf-8') + gsu.to_utf8('\n').decode('utf-8'))
+                    vector_row = '\t'.join(str(x) for x in model[word])
+                    file_vector.write(vector_row + '\n')
+
+        print("2D tensor file saved to %s", outfiletsv)
+        print("Tensor metadata file saved to %s", outfiletsvmeta)
+
+        with open(outfiletsvmeta, mode='r', encoding='utf-8', errors='strict') as metadata_file:
+            metadata = metadata_file.read()
+        converted_string = ''
+        for element in metadata.splitlines():
+            string = element.strip()
+            converted_string += definitions_dict[string] + '\n'
+        with open(os.path.join(save_path, 'w2v_defined_metadata.tsv'), mode='w', encoding='utf-8', errors='strict') as converted_metadata:
+            converted_metadata.write(converted_string)
+
+    # Transform the profile state lists (active meds, active classes and
+    # ordering department) into lists for input into the scikit-learn
+    # column transformer
+    def prepare_pse_data(self, active_meds, active_classes, departments):
+        print('Preparing data for PSE...')
+        pse_data = [[am, ac, de] for am, ac, de in zip(
+            active_meds, active_classes, departments)]
+        self.n_pse_columns = len(pse_data[0])
+        return pse_data, self.n_pse_columns
+
+    # Define the profile state encoder pipeline, encode as multihot if use_lsi
+    # is false and perform latent semantic indexing (decomposed into tfidf and
+    # truncated SVD (gensim LsiTransformer) because uses too much ram with
+    # sci-kit learn lsi transformer)
+    def define_pse_pipeline(self, use_lsi=False, tsvd_n_components=0):
+        self.use_lsi = use_lsi
+        pse_transformers = []
+        for i in range(self.n_pse_columns):
+            pse_transformers.append(('pse{}'.format(i), CountVectorizer(
+                lowercase=False, preprocessor=self.pse_pp, analyzer=self.pse_a), i))
+        pse_pipeline_transformers = [
+            ('columntrans', ColumnTransformer(transformers=pse_transformers))
+        ]
+        if self.use_lsi:
+            pse_pipeline_transformers.extend([
+                ('tfidf', TfidfTransformer()),
+                ('sparse2corpus', FunctionTransformer(func=Sparse2Corpus,
+                                                      accept_sparse=True, validate=False, kw_args={'documents_columns': False})),
+                ('tsvd', LsiTransformer(tsvd_n_components))
+            ])
+        self.pse = Pipeline(pse_pipeline_transformers)
+
+    # Fit and save the pipeline as well as required values to properly load and use.
+    def fitsave_pse_pipeline(self, save_path, pse_data, tsvd_n_components=0):
+        print('Fitting PSE...')
+        self.pse.fit(pse_data)
+        # If encoding as multi-hot (no latent semantic indexing)
+        # compute the shape of the multi-hot (required by the neural network)
+        if self.use_lsi == False:
+            pse_shape = sum([len(transformer[1].vocabulary_)
+                             for transformer in self.pse.named_steps['columntrans'].transformers_])
+        else:
+            pse_shape = tsvd_n_components
+        # save the fitted profile state encoder
+        joblib.dump((self.use_lsi, pse_shape, self.pse),
+                    os.path.join(save_path, 'pse.joblib'))
+        return self.pse, pse_shape
+
+    # string preprocessor (join the strings with spaces to simulate a text)
     def pse_pp(self, x):
         return ' '.join(x)
 
-    # analyzer (do not transform the strings, use them as is because they are not words.)
+    # string analyzer (do not transform the strings, use them as is because they are not words.)
     def pse_a(self, x):
         return x
+
+    # Encode the labels, save the pipeline
+    def fitsave_labelencoder(self, save_path, targets):
+        le = LabelEncoder()
+        le.fit(targets)
+        joblib.dump(le, os.path.join(save_path, 'le.joblib'))
+        output_n_classes = len(le.classes_)
+        return le, output_n_classes
 
 
 class TransformedGenerator(keras.utils.Sequence):
@@ -520,8 +642,14 @@ class visualization:
         acc_df = df[['sparse_top10_accuracy', 'val_sparse_top10_accuracy', 'sparse_top30_accuracy',
                      'val_sparse_top30_accuracy', 'sparse_categorical_accuracy', 'val_sparse_categorical_accuracy']].copy()
         # Rename columns to clearer names
-        acc_df.rename(inplace=True, index=str, columns={'sparse_top30_accuracy': 'Train top 30 accuracy', 'val_sparse_top30_accuracy': 'Val top 30 accuracy', 'sparse_top10_accuracy': 'Train top 10 accuracy',
-                                                        'val_sparse_top10_accuracy': 'Val top 10 accuracy', 'sparse_categorical_accuracy': 'Train top 1 accuracy', 'val_sparse_categorical_accuracy': 'Val top 1 accuracy'})
+        acc_df.rename(inplace=True, index=str, columns={
+            'sparse_top30_accuracy': 'Train top 30 accuracy', 
+            'val_sparse_top30_accuracy': 'Val top 30 accuracy', 
+            'sparse_top10_accuracy': 'Train top 10 accuracy', 
+            'val_sparse_top10_accuracy': 'Val top 10 accuracy', 
+            'sparse_categorical_accuracy': 'Train top 1 accuracy', 
+            'val_sparse_categorical_accuracy': 'Val top 1 accuracy', 
+            })
         # Structure the dataframe as expected by Seaborn
         acc_df = acc_df.stack().reset_index()
         acc_df.rename(inplace=True, index=str, columns={
@@ -560,14 +688,20 @@ class visualization:
     def plot_crossval_accuracy_history(self, df, save_path):
             # Select only useful columns
         cv_results_df_filtered = df[['sparse_top30_accuracy', 'val_sparse_top30_accuracy', 'sparse_top10_accuracy',
-                                        'val_sparse_top10_accuracy', 'sparse_categorical_accuracy', 'val_sparse_categorical_accuracy']].copy()
+                                     'val_sparse_top10_accuracy', 'sparse_categorical_accuracy', 'val_sparse_categorical_accuracy']].copy()
         # Rename columns to clearer names
-        cv_results_df_filtered.rename(inplace=True, index=str, columns={'sparse_top30_accuracy': 'Train top 30 accuracy', 'val_sparse_top30_accuracy': 'Val top 30 accuracy', 'sparse_top10_accuracy': 'Train top 10 accuracy',
-                                                                        'val_sparse_top10_accuracy': 'Val top 10 accuracy', 'sparse_categorical_accuracy': 'Train top 1 accuracy', 'val_sparse_categorical_accuracy': 'Val top 1 accuracy'})
+        cv_results_df_filtered.rename(inplace=True, index=str, columns={
+            'sparse_top30_accuracy': 'Train top 30 accuracy', 
+            'val_sparse_top30_accuracy': 'Val top 30 accuracy', 
+            'sparse_top10_accuracy': 'Train top 10 accuracy', 
+            'val_sparse_top10_accuracy': 'Val top 10 accuracy', 
+            'sparse_categorical_accuracy': 'Train top 1 accuracy', 
+            'val_sparse_categorical_accuracy': 'Val top 1 accuracy', 
+            })
         # Structure the dataframe as expected by Seaborn
         cv_results_graph_df = cv_results_df_filtered.stack().reset_index()
         cv_results_graph_df.rename(inplace=True, index=str, columns={
-                                    'level_0': 'Split', 'level_1': 'Metric', 0: 'Result'})
+            'level_0': 'Split', 'level_1': 'Metric', 0: 'Result'})
         # Make sure the splits are int to avoid weird ordering effects in the plot
         cv_results_graph_df['Split'] = cv_results_graph_df['Split'].astype(
             'int8')
@@ -589,11 +723,11 @@ class visualization:
         cv_results_df_filtered = df[['loss', 'val_loss']].copy()
         # Rename columns to clearer names
         cv_results_df_filtered.rename(inplace=True, index=str, columns={
-                                        'loss': 'Train loss', 'val_loss': 'Val loss'})
+            'loss': 'Train loss', 'val_loss': 'Val loss'})
         # Structure the dataframe as expected by Seaborn
         cv_results_graph_df = cv_results_df_filtered.stack().reset_index()
         cv_results_graph_df.rename(inplace=True, index=str, columns={
-                                    'level_0': 'Split', 'level_1': 'Metric', 0: 'Result'})
+            'level_0': 'Split', 'level_1': 'Metric', 0: 'Result'})
         # Make sure the splits are int to avoid weird ordering effects in the plot
         cv_results_graph_df['Split'] = cv_results_graph_df['Split'].astype(
             'int8')
