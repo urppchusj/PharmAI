@@ -1,7 +1,5 @@
 # %% [markdown]
-# # Model.py
-#
-# Start training the model with validation.
+# # Start training the model with validation.
 
 # %% [markdown]
 # ## Setup
@@ -142,6 +140,7 @@ pse, pse_shape = tp.fitsave_pse_pipeline(SAVE_PATH, pse_data)
 # ### Label encoder
 # Encode the targets
 
+# %%
 le, output_n_classes = tp.fitsave_labelencoder(SAVE_PATH, targets_train)
 
 # %% [markdown]
@@ -159,7 +158,6 @@ test_generator = TransformedGenerator(MODE, w2v_step, USE_LSI, pse, le, targets_
                                       active_meds_test, active_classes_test, depa_test, W2V_EMBEDDING_DIM, SEQUENCE_LENGTH, BATCH_SIZE, shuffle=False)
 
 # %%
-
 # Define the callbacks
 n = neural_network(MODE)
 callbacks = n.callbacks(SAVE_PATH)
