@@ -13,7 +13,7 @@ from gensim.sklearn_api import LsiTransformer, W2VTransformer
 from matplotlib import pyplot as plt
 from sklearn.compose import ColumnTransformer
 from sklearn.feature_extraction.text import CountVectorizer, TfidfTransformer
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split, TimeSeriesSplit
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import FunctionTransformer, LabelEncoder
 from tensorflow import keras, test
@@ -138,13 +138,23 @@ class data:
         self.enc_train, self.enc_val = train_test_split(
             self.enc, shuffle=False, test_size=0.25)
 
-    def cross_val_split(self, train_indices, val_indices):
-        print('Splitting encounters into train and validation sets...')
-        self.enc_train = [self.enc[i] for i in train_indices]
-        self.enc_val = [self.enc[i] for i in val_indices]
+    def cross_val_split(self, n_folds):
+        print('Splitting encounters into train and validation sets for {} cross-validation folds...'.format(n_folds))
+        self.enc_train_list = []
+        self.enc_val_list = []
+        for train_indices, val_indices in TimeSeriesSplit(n_splits=n_folds).split(self.enc):
+            self.enc_train_list.append([self.enc[i] for i in train_indices])
+            self.enc_val_list.append([self.enc[i] for i in val_indices])
 
-    def make_lists(self, get_valid=True):
+    def make_lists(self, get_valid=True, cross_val_fold=None):
         print('Building data lists...')
+
+        # If building lists in cross-validation (cross_val_fold > 0),
+        # use the encounters in the cross_val lists instead of the
+        # entire encounter list
+        if cross_val_fold is not None:
+            self.enc_train = self.enc_train_list[cross_val_fold]
+            self.enc_val = self.enc_val_list[cross_val_fold]
 
         # Training set
         print('Building training set...')
@@ -239,13 +249,13 @@ class transformation_pipelines:
 
     # Fit the pipeline, normalize the embeddings and save the
     # pipeline as well as required values to proprely load and use.
-    def fitsave_w2v_pipeline(self, save_path, profiles_train, w2v_embedding_dim):
+    def fitsave_w2v_pipeline(self, save_path, profiles_train, w2v_embedding_dim, n_fold):
         print('Fitting word2vec embeddings...')
         self.w2v.fit(profiles_train)
         # Normalize the embeddings
         self.w2v.named_steps['w2v'].gensim_model.init_sims(replace=True)
         # save the fitted word2vec pipe
-        joblib.dump((w2v_embedding_dim, self.w2v),
+        joblib.dump((w2v_embedding_dim, n_fold, self.w2v),
                     os.path.join(save_path, 'w2v.joblib'))
         return self.w2v
 
@@ -296,6 +306,7 @@ class transformation_pipelines:
     # sci-kit learn lsi transformer)
     def define_pse_pipeline(self, use_lsi=False, tsvd_n_components=0):
         self.use_lsi = use_lsi
+        self.tsvd_n_components = tsvd_n_components
         pse_transformers = []
         for i in range(self.n_pse_columns):
             pse_transformers.append(('pse{}'.format(i), CountVectorizer(
@@ -308,12 +319,12 @@ class transformation_pipelines:
                 ('tfidf', TfidfTransformer()),
                 ('sparse2corpus', FunctionTransformer(func=Sparse2Corpus,
                                                       accept_sparse=True, validate=False, kw_args={'documents_columns': False})),
-                ('tsvd', LsiTransformer(tsvd_n_components))
+                ('tsvd', LsiTransformer(self.tsvd_n_components))
             ])
         self.pse = Pipeline(pse_pipeline_transformers)
 
     # Fit and save the pipeline as well as required values to properly load and use.
-    def fitsave_pse_pipeline(self, save_path, pse_data, tsvd_n_components=0):
+    def fitsave_pse_pipeline(self, save_path, pse_data, n_fold):
         print('Fitting PSE...')
         self.pse.fit(pse_data)
         # If encoding as multi-hot (no latent semantic indexing)
@@ -322,9 +333,9 @@ class transformation_pipelines:
             pse_shape = sum([len(transformer[1].vocabulary_)
                              for transformer in self.pse.named_steps['columntrans'].transformers_])
         else:
-            pse_shape = tsvd_n_components
+            pse_shape = self.tsvd_n_components
         # save the fitted profile state encoder
-        joblib.dump((self.use_lsi, pse_shape, self.pse, self.pse_pp, self.pse_a),
+        joblib.dump((self.use_lsi, self.tsvd_n_components, pse_shape, n_fold, self.pse, self.pse_pp, self.pse_a),
                     os.path.join(save_path, 'pse.joblib'))
         return self.pse, pse_shape
 
@@ -337,11 +348,12 @@ class transformation_pipelines:
         return x
 
     # Encode the labels, save the pipeline
-    def fitsave_labelencoder(self, save_path, targets):
+    def fitsave_labelencoder(self, save_path, targets, n_fold):
         le = LabelEncoder()
         le.fit(targets)
         output_n_classes = len(le.classes_)
-        joblib.dump((le, output_n_classes), os.path.join(save_path, 'le.joblib'))
+        joblib.dump((output_n_classes, n_fold, le),
+                    os.path.join(save_path, 'le.joblib'))
         return le, output_n_classes
 
 
@@ -482,6 +494,8 @@ class neural_network:
         callbacks = []
 
         callbacks.append(EpochLoggerCallback(save_path))
+        callbacks.append(ModelCheckpoint(os.path.join(
+            save_path, 'partially_trained_model.h5'), verbose=1))
         # Train with valid and cross-val callbacks
         if callback_mode == 'train_with_valid' or callback_mode == 'cross_val':
             callbacks.append(ReduceLROnPlateau(
@@ -490,8 +504,6 @@ class neural_network:
                                            patience=5, verbose=1, restore_best_weights=True))
         # Train with valid and train no valid callbacks
         if callback_mode == 'train_with_valid' or callback_mode == 'train_no_valid':
-            callbacks.append(ModelCheckpoint(os.path.join(
-                save_path, 'partially_trained_model.h5'), verbose=1))
             callbacks.append(CSVLogger(os.path.join(
                 save_path, 'training_history.csv'), append=True))
         if callback_mode == 'train_no_valid':
@@ -642,13 +654,13 @@ class visualization:
                      'val_sparse_top30_accuracy', 'sparse_categorical_accuracy', 'val_sparse_categorical_accuracy']].copy()
         # Rename columns to clearer names
         acc_df.rename(inplace=True, index=str, columns={
-            'sparse_top30_accuracy': 'Train top 30 accuracy', 
-            'val_sparse_top30_accuracy': 'Val top 30 accuracy', 
-            'sparse_top10_accuracy': 'Train top 10 accuracy', 
-            'val_sparse_top10_accuracy': 'Val top 10 accuracy', 
-            'sparse_categorical_accuracy': 'Train top 1 accuracy', 
-            'val_sparse_categorical_accuracy': 'Val top 1 accuracy', 
-            })
+            'sparse_top30_accuracy': 'Train top 30 accuracy',
+            'val_sparse_top30_accuracy': 'Val top 30 accuracy',
+            'sparse_top10_accuracy': 'Train top 10 accuracy',
+            'val_sparse_top10_accuracy': 'Val top 10 accuracy',
+            'sparse_categorical_accuracy': 'Train top 1 accuracy',
+            'val_sparse_categorical_accuracy': 'Val top 1 accuracy',
+        })
         # Structure the dataframe as expected by Seaborn
         acc_df = acc_df.stack().reset_index()
         acc_df.rename(inplace=True, index=str, columns={
@@ -690,13 +702,13 @@ class visualization:
                                      'val_sparse_top10_accuracy', 'sparse_categorical_accuracy', 'val_sparse_categorical_accuracy']].copy()
         # Rename columns to clearer names
         cv_results_df_filtered.rename(inplace=True, index=str, columns={
-            'sparse_top30_accuracy': 'Train top 30 accuracy', 
-            'val_sparse_top30_accuracy': 'Val top 30 accuracy', 
-            'sparse_top10_accuracy': 'Train top 10 accuracy', 
-            'val_sparse_top10_accuracy': 'Val top 10 accuracy', 
-            'sparse_categorical_accuracy': 'Train top 1 accuracy', 
-            'val_sparse_categorical_accuracy': 'Val top 1 accuracy', 
-            })
+            'sparse_top30_accuracy': 'Train top 30 accuracy',
+            'val_sparse_top30_accuracy': 'Val top 30 accuracy',
+            'sparse_top10_accuracy': 'Train top 10 accuracy',
+            'val_sparse_top10_accuracy': 'Val top 10 accuracy',
+            'sparse_categorical_accuracy': 'Train top 1 accuracy',
+            'val_sparse_categorical_accuracy': 'Val top 1 accuracy',
+        })
         # Structure the dataframe as expected by Seaborn
         cv_results_graph_df = cv_results_df_filtered.stack().reset_index()
         cv_results_graph_df.rename(inplace=True, index=str, columns={
