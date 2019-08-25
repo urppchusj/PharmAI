@@ -79,7 +79,15 @@ SEQUENCE_LENGTH = 30
 BATCH_SIZE = 256
 
 N_TRAINING_STEPS_PER_EPOCH = 1000
-N_VALIDATIONS_STEPS_PER_EPOCH = 1000
+N_VALIDATION_STEPS_PER_EPOCH = 1000
+
+# %%
+# Save the parameters
+param_dict = dict(((k,eval(k)) for k in ('MODE', 'RESTRICT_DATA', 'RESTRICT_SAMPLE_SIZE', 'DATA_DIR', 'W2V_ALPHA', 'W2V_ITER', 'W2V_EMBEDDING_DIM', 'W2V_HS', 'W2V_SG', 'W2V_MIN_COUNT', 'W2V_WORKERS', 'EXPORT_W2V_EMBEDDINGS', 'USE_LSI', 'TSVD_N_COMPONENTS', 'N_LSTM', 'N_PSE_DENSE', 'N_DENSE', 'LSTM_SIZE', 'DENSE_PSE_SIZE', 'CONCAT_LSTM_SIZE', 'CONCAT_TOTAL_SIZE', 'DENSE_SIZE', 'DROPOUT', 'L2_REG', 'SEQUENCE_LENGTH', 'BATCH_SIZE', 'N_TRAINING_STEPS_PER_EPOCH', 'N_VALIDATION_STEPS_PER_EPOCH')))
+
+with open(os.path.join(SAVE_PATH, 'parameters.txt'), mode='w') as file:
+    for k, v in param_dict.items():
+        file.write(str(k) + ': ' + str(v) + '\n')
 
 # %%
 # Check if running inside Jupyter notebook or not (will be used later for Keras progress bars)
@@ -90,7 +98,7 @@ in_ipynb = check_ipynb().is_inipynb()
 # Save parameters
 
 with open(os.path.join(SAVE_PATH, 'hp.pkl'), mode='wb') as file:
-    pickle.dump((MODE, DATA_DIR, BATCH_SIZE, SEQUENCE_LENGTH, N_TRAINING_STEPS_PER_EPOCH, N_VALIDATIONS_STEPS_PER_EPOCH), file)
+    pickle.dump((MODE, DATA_DIR, BATCH_SIZE, SEQUENCE_LENGTH, N_TRAINING_STEPS_PER_EPOCH, N_VALIDATION_STEPS_PER_EPOCH), file)
 
 # %% [markdown]
 # ## Data
@@ -191,7 +199,7 @@ model.fit_generator(train_generator,
                     steps_per_epoch=N_TRAINING_STEPS_PER_EPOCH,
                     callbacks=callbacks,
                     validation_data=test_generator,
-                    validation_steps=N_VALIDATIONS_STEPS_PER_EPOCH,
+                    validation_steps=N_VALIDATION_STEPS_PER_EPOCH,
                     verbose=verbose)
 
 model.save(os.path.join(SAVE_PATH, 'model.h5'))
