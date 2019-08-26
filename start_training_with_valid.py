@@ -80,8 +80,8 @@ L2_REG = 0
 SEQUENCE_LENGTH = 30
 BATCH_SIZE = 256
 
-N_TRAINING_STEPS_PER_EPOCH = 10
-N_VALIDATION_STEPS_PER_EPOCH = 10
+N_TRAINING_STEPS_PER_EPOCH = 1000
+N_VALIDATION_STEPS_PER_EPOCH = 1000
 
 # %%
 # Save the parameters
@@ -140,6 +140,7 @@ for i in range(loop_iters):
     # Make the data lists
     if CROSS_VALIDATE:
         cross_val_fold = i
+        print('Performing cross-validation, fold: {}'.format(i))
     else:
         cross_val_fold = None
     profiles_train, targets_train, pre_seq_train, post_seq_train, active_meds_train, active_classes_train, depa_train, targets_test, pre_seq_test, post_seq_test, active_meds_test, active_classes_test, depa_test, definitions = d.make_lists(cross_val_fold=cross_val_fold)
