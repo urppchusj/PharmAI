@@ -249,13 +249,13 @@ class transformation_pipelines:
 
     # Fit the pipeline, normalize the embeddings and save the
     # pipeline as well as required values to proprely load and use.
-    def fitsave_w2v_pipeline(self, save_path, profiles_train, w2v_embedding_dim, n_fold):
+    def fitsave_w2v_pipeline(self, save_path, profiles_train, n_fold):
         print('Fitting word2vec embeddings...')
         self.w2v.fit(profiles_train)
         # Normalize the embeddings
         self.w2v.named_steps['w2v'].gensim_model.init_sims(replace=True)
         # save the fitted word2vec pipe
-        joblib.dump((w2v_embedding_dim, n_fold, self.w2v),
+        joblib.dump((n_fold, self.w2v),
                     os.path.join(save_path, 'w2v.joblib'))
         return self.w2v
 
@@ -335,7 +335,7 @@ class transformation_pipelines:
         else:
             pse_shape = self.tsvd_n_components
         # save the fitted profile state encoder
-        joblib.dump((self.use_lsi, self.tsvd_n_components, pse_shape, n_fold, self.pse, self.pse_pp, self.pse_a),
+        joblib.dump((pse_shape, n_fold, self.pse, self.pse_pp, self.pse_a),
                     os.path.join(save_path, 'pse.joblib'))
         return self.pse, pse_shape
 
@@ -481,7 +481,7 @@ class neural_network:
         return (sparse_top_k_categorical_accuracy(y_true, y_pred, k=30))
 
     # Callbacks during training
-    def callbacks(self, save_path, callback_mode='train_with_valid'):
+    def callbacks(self, save_path, n_fold, callback_mode='train_with_valid'):
 
         # Assign simple names
         CSVLogger = keras.callbacks.CSVLogger
@@ -495,7 +495,7 @@ class neural_network:
 
         callbacks.append(EpochLoggerCallback(save_path))
         callbacks.append(ModelCheckpoint(os.path.join(
-            save_path, 'partially_trained_model.h5'), verbose=1))
+            save_path, 'partially_trained_model_{}.h5'.format(n_fold)), verbose=1))
         # Train with valid and cross-val callbacks
         if callback_mode == 'train_with_valid' or callback_mode == 'cross_val':
             callbacks.append(ReduceLROnPlateau(
