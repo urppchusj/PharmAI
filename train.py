@@ -50,14 +50,14 @@ except:
         # retrospective for medication profile analysis, prospective for order prediction
         'MODE': 'retrospective',
         # True to do cross-val, false to do single training run with validation
-        'CROSS_VALIDATE': False,
+        'CROSS_VALIDATE': True,
         'N_CROSS_VALIDATION_FOLDS': 5,
 
         # Data parameters
         # False prepares all data, True samples a number of encounters for faster execution, useful for debugging or testing
-        'RESTRICT_DATA': True,
-        'RESTRICT_SAMPLE_SIZE':100, # The number of encounters to sample in the restricted data.
-        'DATA_DIR': '1yr',  # Where to find the preprocessed data.
+        'RESTRICT_DATA': False,
+        'RESTRICT_SAMPLE_SIZE':1000, # The number of encounters to sample in the restricted data.
+        'DATA_DIR': '5yr',  # Where to find the preprocessed data.
 
         # Word2vec parameters
         'W2V_ALPHA': 0.013,
@@ -91,9 +91,9 @@ except:
 
         # Neural network training parameters,
         'BATCH_SIZE': 256,
-        'MAX_TRAINING_EPOCHS':2, # Default 1000, should never get there, reduce for faster execution when testing or debugging.
-        'N_TRAINING_STEPS_PER_EPOCH': 10,
-        'N_VALIDATION_STEPS_PER_EPOCH': 10,
+        'MAX_TRAINING_EPOCHS':1000, # Default 1000, should never get there, reduce for faster execution when testing or debugging.
+        'N_TRAINING_STEPS_PER_EPOCH': 1000,
+        'N_VALIDATION_STEPS_PER_EPOCH': 1000,
     }
     param = SimpleNamespace(**parameters_dict)
 
