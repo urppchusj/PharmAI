@@ -481,7 +481,12 @@ class neural_network:
         return (sparse_top_k_categorical_accuracy(y_true, y_pred, k=30))
 
     # Callbacks during training
-    def callbacks(self, save_path, n_fold, callback_mode='train_with_valid'):
+    def callbacks(self, save_path, n_fold, callback_mode='train_with_valid', learning_rate_schedule=None):
+
+        # Learning rate schedule is a dict where the keys are
+        # the epoch at which the learning rate changes and values
+        # are the new learning rate.
+        self.learning_rate_schedule = learning_rate_schedule
 
         # Assign simple names
         CSVLogger = keras.callbacks.CSVLogger
@@ -513,7 +518,10 @@ class neural_network:
     def schedule(self, i, cur_lr):
         # The schedule is hardcoded here from the results
         # of a training with validation
-        new_lr = cur_lr
+        if i in self.learning_rate_schedule.keys():
+            new_lr = self.learning_rate_schedule[i]
+        else:
+            new_lr = cur_lr
         return new_lr
 
     def define_model(self, sequence_size, n_add_seq_layers, dense_pse_size, concat_sequence_size, concat_total_size, dense_size, dropout, l2_reg, sequence_length, w2v_embedding_dim, pse_shape, n_add_pse_dense, n_dense, output_n_classes):

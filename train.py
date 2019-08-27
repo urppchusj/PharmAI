@@ -1,6 +1,6 @@
 # %% [markdown]
 # # Start or resume training a model.
-# Can be done with cross validation or as a single training run with validation.
+# Can be done with cross validation or as a single training run with or without validation.
 
 # %% [markdown]
 # ## Setup
@@ -30,7 +30,7 @@ from components import (TransformedGenerator, check_ipynb, data,
 # Save path and parameter loading
 
 # Empty string to start training a new model, else will load parameters from this directory; will start a new model if can't load.
-LOAD_FROM = 'retrospective/20190825-2225'
+LOAD_FROM = ''
 
 # Check if can load hyperparameters from specified dir, else create new dir
 try:
@@ -50,8 +50,10 @@ except:
         # retrospective for medication profile analysis, prospective for order prediction
         'MODE': 'retrospective',
         # True to do cross-val, false to do single training run with validation
-        'CROSS_VALIDATE': True,
+        'CROSS_VALIDATE': False,
         'N_CROSS_VALIDATION_FOLDS': 5,
+        # Validate when doing a single training run. Cross-validation has priority over this
+        'VALIDATE': False,
 
         # Data parameters
         # False prepares all data, True samples a number of encounters for faster execution, useful for debugging or testing
@@ -92,6 +94,8 @@ except:
         # Neural network training parameters,
         'BATCH_SIZE': 256,
         'MAX_TRAINING_EPOCHS':1000, # Default 1000, should never get there, reduce for faster execution when testing or debugging.
+        'SINGLE_RUN_EPOCHS':16, # How many epochs to train when doing a single run without validation
+        'LEARNING_RATE_SCHEDULE':{14:1e-4}, # Dict where keys are epoch index (epoch - 1) where the learning rate decreases and values are the new learning rate.
         'N_TRAINING_STEPS_PER_EPOCH': 1000,
         'N_VALIDATION_STEPS_PER_EPOCH': 1000,
     }
@@ -168,7 +172,7 @@ else:
 
 if param.CROSS_VALIDATE:
     d.cross_val_split(param.N_CROSS_VALIDATION_FOLDS)
-else:
+elif param.VALIDATE:
     d.split()
 
 # %% [markdown]
@@ -192,10 +196,15 @@ for i in range(initial_fold, loop_iters):
     if param.CROSS_VALIDATE:
         cross_val_fold = i
         print('Performing cross-validation, fold: {}'.format(i))
+        get_valid = True
+    elif param.VALIDATE:
+        get_valid = True
+        cross_val_fold = None
     else:
+        get_valid=False
         cross_val_fold = None
 
-    profiles_train, targets_train, pre_seq_train, post_seq_train, active_meds_train, active_classes_train, depa_train, targets_test, pre_seq_test, post_seq_test, active_meds_test, active_classes_test, depa_test, definitions = d.make_lists(
+    profiles_train, targets_train, pre_seq_train, post_seq_train, active_meds_train, active_classes_train, depa_train, targets_test, pre_seq_test, post_seq_test, active_meds_test, active_classes_test, depa_test, definitions = d.make_lists(get_valid=get_valid,
         cross_val_fold=cross_val_fold)
 
     # Try loading previously fitted transformation pipelines. If they do not exist or do not
@@ -250,21 +259,30 @@ for i in range(initial_fold, loop_iters):
     # profile from the sequence of drug orders that came before or after it
     # and the profile state excluding that drug.
 
-    # Build the generators
+    # Build the generators, prepare the variables for fitting
     w2v_step = w2v.named_steps['w2v']
     train_generator = TransformedGenerator(param.MODE, w2v_step, param.USE_LSI, pse, le, targets_train, pre_seq_train, post_seq_train,
                                            active_meds_train, active_classes_train, depa_train, param.W2V_EMBEDDING_DIM, param.SEQUENCE_LENGTH, param.BATCH_SIZE)
 
-    test_generator = TransformedGenerator(param.MODE, w2v_step, param.USE_LSI, pse, le, targets_test, pre_seq_test, post_seq_test,
-                                          active_meds_test, active_classes_test, depa_test, param.W2V_EMBEDDING_DIM, param.SEQUENCE_LENGTH, param.BATCH_SIZE)
+    if param.CROSS_VALIDATE or param.VALIDATE:
+        test_generator = TransformedGenerator(param.MODE, w2v_step, param.USE_LSI, pse, le, targets_test, pre_seq_test, post_seq_test,
+                                           active_meds_test, active_classes_test, depa_test, param.W2V_EMBEDDING_DIM, param.SEQUENCE_LENGTH, param.BATCH_SIZE)
+        n_validation_steps_per_epoch = param.N_VALIDATION_STEPS_PER_EPOCH
+        training_epochs = param.MAX_TRAINING_EPOCHS
+    else:
+        test_generator = None
+        n_validation_steps_per_epoch = None
+        training_epochs = param.SINGLE_RUN_EPOCHS
 
     # Define the callbacks
     n = neural_network(param.MODE)
     if param.CROSS_VALIDATE:
         callback_mode = 'cross_val'
-    else:
+    elif param.VALIDATE:
         callback_mode = 'train_with_valid'
-    callbacks = n.callbacks(save_path, i, callback_mode=callback_mode)
+    else:
+        callback_mode = 'train_no_valid'
+    callbacks = n.callbacks(save_path, i, callback_mode=callback_mode, learning_rate_schedule=param.LEARNING_RATE_SCHEDULE)
 
     # Try loading a partially trained neural network for current fold,
     # or define a new neural network
@@ -287,12 +305,12 @@ for i in range(initial_fold, loop_iters):
         verbose = 1
 
     model.fit_generator(train_generator,
-                        epochs=param.MAX_TRAINING_EPOCHS,
+                        epochs=training_epochs,
                         steps_per_epoch=param.N_TRAINING_STEPS_PER_EPOCH,
                         callbacks=callbacks,
                         initial_epoch=initial_epoch,
                         validation_data=test_generator,
-                        validation_steps=param.N_VALIDATION_STEPS_PER_EPOCH,
+                        validation_steps=n_validation_steps_per_epoch,
                         verbose=verbose)
 
     # If doing cross-validation, get the metrics for the best
@@ -337,7 +355,7 @@ if param.CROSS_VALIDATE:
     cv_results_df = pd.read_csv(os.path.join(save_path, 'cv_results.csv'))
     v.plot_crossval_accuracy_history(cv_results_df, save_path)
     v.plot_crossval_loss_history(cv_results_df, save_path)
-else:
+elif param.VALIDATE:
     history_df = pd.read_csv(os.path.join(save_path, 'training_history.csv'))
     v.plot_accuracy_history(history_df, save_path)
     v.plot_loss_history(history_df, save_path)
