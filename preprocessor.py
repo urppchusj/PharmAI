@@ -251,7 +251,7 @@ class preprocessor():
 
     def preprocess(self):
         # Preprocess the data
-        targets_dict, profiles_dict, pre_seq_dict, post_seq_dict, active_profiles_dict, active_classes_dict, depa_dict, enc_list = self.get_profiles()
+        profiles_dict, targets_dict, pre_seq_dict, post_seq_dict, active_profiles_dict, active_classes_dict, depa_dict, enc_list = self.get_profiles()
         # Save preprocessed data to pickle file
         pathlib.Path(self.data_save_path).mkdir(parents=True, exist_ok=True)
         with open(os.path.join(self.data_save_path, 'targets_list.pkl'), mode='wb') as file:
@@ -262,7 +262,7 @@ class preprocessor():
             pickle.dump(pre_seq_dict, file)
         with open(os.path.join(self.data_save_path, 'post_seq_list.pkl'), mode='wb') as file:
             pickle.dump(post_seq_dict, file)
-        with open(os.path.join(self.data_save_path, 'active_profiles_list.pkl'), mode='wb') as file:
+        with open(os.path.join(self.data_save_path, 'active_meds_list.pkl'), mode='wb') as file:
             pickle.dump(active_profiles_dict, file)
         with open(os.path.join(self.data_save_path, 'active_classes_list.pkl'), mode='wb') as file:
             pickle.dump(active_classes_dict, file)
