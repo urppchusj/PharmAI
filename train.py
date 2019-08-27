@@ -147,7 +147,7 @@ in_ipynb = check_ipynb().is_inipynb()
 # %% [markdown]
 # ## Data
 #
-# Load the data to resume the training
+# Load the data to start or resume the training
 
 # %%
 # Load the data
@@ -255,9 +255,6 @@ for i in range(initial_fold, loop_iters):
             save_path, targets_train, i)
 
     # Neural network
-    # Train a neural network to predict each drug present in a pharmacological
-    # profile from the sequence of drug orders that came before or after it
-    # and the profile state excluding that drug.
 
     # Build the generators, prepare the variables for fitting
     w2v_step = w2v.named_steps['w2v']
