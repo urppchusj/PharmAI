@@ -30,7 +30,7 @@ from components import (TransformedGenerator, check_ipynb, data,
 # Save path and parameter loading
 
 # Empty string to start training a new model, else will load parameters from this directory; will start a new model if can't load.
-LOAD_FROM = ''
+LOAD_FROM = 'retrospective/20190827-2235'
 
 # Check if can load hyperparameters from specified dir, else create new dir
 try:

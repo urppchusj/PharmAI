@@ -146,7 +146,7 @@ class data:
             self.enc_train_list.append([self.enc[i] for i in train_indices])
             self.enc_val_list.append([self.enc[i] for i in val_indices])
 
-    def make_lists(self, get_valid=True, cross_val_fold=None):
+    def make_lists(self, get_valid=True, cross_val_fold=None, shuffle_train_set=True):
         print('Building data lists...')
 
         # If building lists in cross-validation (cross_val_fold > 0),
@@ -180,7 +180,7 @@ class data:
             active_med for enc in self.enc_train for active_med in self.active_meds[enc]]
         self.active_classes_train = [
             active_class for enc in self.enc_train for active_class in self.active_classes[enc]]
-        self.depa_train = [str(depa)
+        self.depa_train = [[str(dep) for dep in depa]
                            for enc in self.enc_train for depa in self.depas[enc]]
 
         # Make a list of unique targets in train set to exclude unseen targets from validation set
@@ -200,7 +200,7 @@ class data:
                 self.active_meds[enc], self.targets[enc]) if target in unique_targets_train]
             self.active_classes_val = [active_class for enc in self.enc_val for active_class, target in zip(
                 self.active_classes[enc], self.targets[enc]) if target in unique_targets_train]
-            self.depa_val = [str(depa) for enc in self.enc_val for depa, target in zip(
+            self.depa_val = [[str(dep) for dep in depa] for enc in self.enc_val for depa, target in zip(
                 self.depas[enc], self.targets[enc]) if target in unique_targets_train]
         else:
             self.targets_val = None
@@ -210,13 +210,14 @@ class data:
             self.active_classes_val = None
             self.depa_val = None
 
-        # Initial shuffle of training set
-        print('Shuffling training set...')
-        shuffled = list(zip(self.targets_train, self.pre_seq_train, self.post_seq_train,
-                            self.active_meds_train, self.active_classes_train, self.depa_train))
-        random.shuffle(shuffled)
-        self.targets_train, self.pre_seq_train, self.post_seq_train, self.active_meds_train, self.active_classes_train, self.depa_train = zip(
-            *shuffled)
+        if shuffle_train_set:
+            # Initial shuffle of training set
+            print('Shuffling training set...')
+            shuffled = list(zip(self.targets_train, self.pre_seq_train, self.post_seq_train,
+                                self.active_meds_train, self.active_classes_train, self.depa_train))
+            random.shuffle(shuffled)
+            self.targets_train, self.pre_seq_train, self.post_seq_train, self.active_meds_train, self.active_classes_train, self.depa_train = zip(
+                *shuffled)
 
        # Print out the number of samples obtained to make sure they match.
         print('Training set: Obtained {} profiles, {} targets, {} pre sequences, {} post sequences, {} active meds, {} active classes, {} depas and {} encs.'.format(len(self.profiles_train), len(
