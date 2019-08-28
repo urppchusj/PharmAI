@@ -67,7 +67,7 @@ d.load_data(save_path=save_path, get_profiles=False)
 # Make the data lists
 
 #%%
-_, targets, pre_seqs, post_seqs, active_meds, active_classes, depas, _, _, _, _, definitions = d.make_lists(get_valid=False)
+_, targets, pre_seqs, post_seqs, active_meds, active_classes, depas, _, _, _, _, _, _, definitions = d.make_lists(get_valid=False, shuffle_train_set=False)
 
 #%%[markdown]
 # ## Word2vec embeddings
@@ -98,16 +98,17 @@ _, _, le = joblib.load(os.path.join(save_path, 'le.joblib'))
 # are discarded
 
 #%%
+print('Filtering unseen targets...')
 pre_discard_n_targets = len(targets)
-targets = [target for target in targets if target in le.classes_]
-pre_seqs = [seq for seq, target in zip(pre_seqs, targets) if target in le.classes_]
-post_seqs = [seq for seq, target in zip(post_seqs, targets) if target in le.classes_]
-active_meds = [active_med for active_med, target in zip(active_meds, targets) if target in le.classes_]
-active_classes = [active_class for active_class, target in zip(active_classes, targets) if target in le.classes_]
-depas = [depa for depa, target in zip(depas, targets) if target in le.classes_]
-post_discard_n_targets = len(targets)
+filtered_targets = [target for target in targets if target in le.classes_]
+filtered_pre_seqs = [seq for seq, target in zip(pre_seqs, targets) if target in le.classes_]
+filtered_post_seqs = [seq for seq, target in zip(post_seqs, targets) if target in le.classes_]
+filtered_active_meds = [active_med for active_med, target in zip(active_meds, targets) if target in le.classes_]
+filtered_active_classes = [active_class for active_class, target in zip(active_classes, targets) if target in le.classes_]
+filtered_depas = [depa for depa, target in zip(depas, targets) if target in le.classes_]
+post_discard_n_targets = len(filtered_targets)
 
-print('Predicting on {} samples, {:.2f} % of original samples, {} samples discarded because of unseen labels.'.format(pre_discard_n_targets, 100*post_discard_n_targets/pre_discard_n_targets, pre_discard_n_targets-post_discard_n_targets))
+print('Predicting on {} samples, {:.2f} % of original samples, {} samples discarded because of unseen labels.'.format(post_discard_n_targets, 100*post_discard_n_targets/pre_discard_n_targets, pre_discard_n_targets-post_discard_n_targets))
 
 #%%[markdown]
 # ## Neural network
@@ -117,7 +118,7 @@ print('Predicting on {} samples, {:.2f} % of original samples, {} samples discar
 
 # Build the generators, prepare the variables for fitting
 w2v_step = w2v.named_steps['w2v']
-eval_generator = TransformedGenerator(param.MODE, w2v_step, param.USE_LSI, pse, le, targets, pre_seqs, post_seqs, active_meds, active_classes, depas, param.W2V_EMBEDDING_DIM, param.SEQUENCE_LENGTH, param.BATCH_SIZE, shuffle=False)
+eval_generator = TransformedGenerator(param.MODE, w2v_step, param.USE_LSI, pse, le, filtered_targets, filtered_pre_seqs, filtered_post_seqs, filtered_active_meds, filtered_active_classes, filtered_depas, param.W2V_EMBEDDING_DIM, param.SEQUENCE_LENGTH, param.BATCH_SIZE, shuffle=False)
 
 #%%[markdown]
 # ### Instantiate the model
@@ -160,53 +161,82 @@ prediction_labels = le.inverse_transform([np.argmax(prediction) for prediction i
 pl_series = pd.Series(prediction_labels)
 f = sns.countplot(pl_series, order=pl_series.value_counts().index[:50])
 f.set(xticklabels='', xlabel='classes')
-plt.savefig(os.path.join(save_path, 'predictions_distribution.png'))
+if in_ipynb:
+	plt.show()
+else:
+	plt.savefig(os.path.join(save_path, 'predictions_distribution.png'))
 plt.gcf().clear()
 nb_predicted_classes = len(pl_series.value_counts().index)
 print('Number of classes predicted on evaluation set: {}'.format(nb_predicted_classes))
 
 #%%
-cr = classification_report(targets, prediction_labels, output_dict=True)
-cr_df = pd.DataFrame.from_dict(cr, orient='index')
+cr = classification_report(filtered_targets, prediction_labels, output_dict=True)
+cr_df = pd.DataFrame(cr).transpose()
 cr_df.to_csv(os.path.join(save_path,  'eval_classification_report.csv'))
-
-#%%
-binary_labels = label_binarize(targets, le.classes_)
-filtered_binary_labels = np.delete(binary_labels,np.where(~binary_labels.any(axis=0))[0], axis=1)
-filtered_predictions = np.delete(predictions,np.where(~binary_labels.any(axis=0))[0], axis=1)
-rocauc_we = roc_auc_score(filtered_binary_labels, filtered_predictions, average='weighted')
-print('Weighted average ROC AUC score for present labels: {:.3f}'.format(rocauc_we))
-print(cr_df.describe())
+p_we, r_we, _, _ = precision_recall_fscore_support(filtered_targets, prediction_labels, average='weighted')
+print('Weighted average precision score for present labels: {:.3f}'.format(p_we))
+print('Weighted average recall score for present labels: {:.3f}'.format(r_we))
 
 #%%
 department_data = pd.read_csv('data/depas.csv', sep=';')
 department_data.set_index('Numéro', inplace=True)
 department_cat_dict = department_data['Catégorie'].to_dict()
-departments = [list(active_med[-1])[0] for active_med in active_meds]
-categorized_departments = [department_cat_dict[department] for department in departments]
+department_cat_dict['null'] = 'null'
+categorized_departments = [department_cat_dict[department[0] if len(department)>0 else 'null'] for department in filtered_depas]
 unique_categorized_departments = list(set(categorized_departments))
+
+#%%
+# Compute evaluation metrics by department as a proxy for patient
+# category. Make a dataframe with this.
+results_by_depa_dict = {
+	'Department':[],
+	'Top 1 accuracy':[],
+	'Top 10 accuracy':[],
+	'Top 30 accuracy':[]
+}
 for department in unique_categorized_departments:
-	print('Results for category: {}'.format(department))
+	if department == 'null':
+		continue
+	print('\n\nResults for category: {}'.format(department))
 	indices = [i for i, value in enumerate(categorized_departments) if value == department]
-	selected_pre_seqs = [pre_seqs[i] for i in indices]
-	selected_post_seqs = [post_seqs[i] for i in indices]
-	selected_active_meds = [active_meds[i] for i in indices]
-	selected_active_classes = [active_classes[i] for i in indices]
-	selected_depa = [depas[i] for i in indices]
-	selected_targets = [targets[i] for i in indices]
+	selected_pre_seqs = [filtered_pre_seqs[i] for i in indices]
+	selected_post_seqs = [filtered_post_seqs[i] for i in indices]
+	selected_active_meds = [filtered_active_meds[i] for i in indices]
+	selected_active_classes = [filtered_active_classes[i] for i in indices]
+	selected_depa = [filtered_depas[i] for i in indices]
+	selected_targets = [filtered_targets[i] for i in indices]
 	eval_generator = TransformedGenerator(param.MODE, w2v_step, param.USE_LSI, pse, le, selected_targets, selected_pre_seqs, selected_post_seqs, selected_active_meds, selected_active_classes, selected_depa, param.W2V_EMBEDDING_DIM, param.SEQUENCE_LENGTH, param.BATCH_SIZE)
 	results = model.evaluate_generator(eval_generator, verbose=1)
 	predictions = model.predict_generator(eval_generator, verbose=1)
 	print('Evaluation results')
-	print('Predicting on {} samples, {:.2f} % of {} samples.'.format(len(selected_targets), (100*len(selected_targets))/len(targets), len(targets)))
+	print('Predicting on {} samples, {:.2f} % of {} samples.'.format(len(selected_targets), (100*len(selected_targets))/len(filtered_targets), len(filtered_targets)))
 	print('Predictions for {} classes'.format(len(le.classes_)))
 	print('{} classes reprensented in targets'.format(len(set(selected_targets))))
 	for metric, result in zip(model.metrics_names, results):
 		print('Metric: {}   Score: {:.5f}'.format(metric,result))
+	results_by_depa_dict['Department'].append(department)
+	results_by_depa_dict['Top 1 accuracy'].append(results[1])
+	results_by_depa_dict['Top 10 accuracy'].append(results[2])
+	results_by_depa_dict['Top 30 accuracy'].append(results[3])
 	prediction_labels = le.inverse_transform([np.argmax(prediction) for prediction in predictions])
-	binary_labels = label_binarize(selected_targets, le.classes_)
-	filtered_binary_labels = np.delete(binary_labels,np.where(~binary_labels.any(axis=0))[0], axis=1)
-	filtered_predictions = np.delete(predictions,np.where(~binary_labels.any(axis=0))[0], axis=1)
 	p_we, r_we, _, _ = precision_recall_fscore_support(selected_targets, prediction_labels, average='weighted')
 	print('Weighted average precision score for present labels: {:.3f}'.format(p_we))
 	print('Weighted average recall score for present labels: {:.3f}'.format(r_we))
+
+
+#%%
+# Visualize the prediction results by department
+results_by_depa_df = pd.DataFrame(results_by_depa_dict)
+results_by_depa_df.set_index('Department', inplace=True)
+results_by_depa_df.sort_values(by='Top 1 accuracy', inplace=True)
+results_by_depa_df = results_by_depa_df.stack().reset_index()
+results_by_depa_df.rename(columns={'level_1':'Metric', 0:'Result'}, inplace=True)
+sns.set(style='darkgrid')
+plt.xticks(rotation=60, ha='right')
+sns.barplot(x='Department', y='Result', hue='Metric', data=results_by_depa_df)
+if in_ipynb:
+	plt.show()
+else:
+	plt.savefig(os.path.join(save_path, 'accuracy_by_depa.png'))
+
+#%%
