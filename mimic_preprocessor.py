@@ -21,7 +21,7 @@ class preprocessor():
         self.mode = mode
         # Where the preprocessed files will be saved
         self.data_save_path = os.path.join(
-            os.getcwd(), 'preprocessed_data', mode, 'mimic')
+            os.getcwd(), 'preprocessed_data', mode)
         # dtypes of data file columns
         profile_dtypes = {'ROW_ID': np.int32, 'SUBJECT_ID': str, 'HADM_ID': str, 'ICUSTAY_ID': str, 'STARTDATE': str, 'ENDDATE': str, 'DRUG_TYPE': str, 'DRUG': str, 'DRUG_NAME_POE': str, 'DRUG_NAME_GENERIC': str, 'FORMULARY_DRUG_CD': str,
         'GSN': str, 'NDC': str, 'PROD_STRENGTH': str, 'DOSE_VAL_RX': str, 'FORM_VAL_DISP': str, 'FORM_UNIT_DISP': str, 'ROUTE': str}
@@ -267,32 +267,32 @@ class preprocessor():
         # Save preprocessed data to pickle files
         pathlib.Path(self.data_save_path).mkdir(parents=True, exist_ok=True)
         # Train
-        with open(os.path.join(self.data_save_path, 'profiles_list.pkl'), mode='wb') as file:
+        with open(os.path.join(self.data_save_path, 'mimic_train', 'profiles_list.pkl'), mode='wb') as file:
             pickle.dump(profiles_dict_train, file)
-        with open(os.path.join(self.data_save_path, 'targets_list.pkl'), mode='wb') as file:
+        with open(os.path.join(self.data_save_path, 'mimic_train', 'targets_list.pkl'), mode='wb') as file:
             pickle.dump(targets_dict_train, file)
-        with open(os.path.join(self.data_save_path, 'pre_seq_list.pkl'), mode='wb') as file:
+        with open(os.path.join(self.data_save_path, 'mimic_train', 'pre_seq_list.pkl'), mode='wb') as file:
             pickle.dump(pre_seq_dict_train, file)
-        with open(os.path.join(self.data_save_path, 'post_seq_list.pkl'), mode='wb') as file:
+        with open(os.path.join(self.data_save_path, 'mimic_train', 'post_seq_list.pkl'), mode='wb') as file:
             pickle.dump(post_seq_dict_train, file)
-        with open(os.path.join(self.data_save_path, 'active_meds_list.pkl'), mode='wb') as file:
+        with open(os.path.join(self.data_save_path, 'mimic_train', 'active_meds_list.pkl'), mode='wb') as file:
             pickle.dump(active_meds_dict_train, file)
-        with open(os.path.join(self.data_save_path, 'depa_list.pkl'), mode='wb') as file:
+        with open(os.path.join(self.data_save_path, 'mimic_train', 'depa_list.pkl'), mode='wb') as file:
             pickle.dump(depa_dict_train, file)
-        with open(os.path.join(self.data_save_path, 'enc_list.pkl'), mode='wb') as file:
+        with open(os.path.join(self.data_save_path, 'mimic_train', 'enc_list.pkl'), mode='wb') as file:
             pickle.dump(enc_train, file)
         # Test
-        with open(os.path.join(self.data_save_path, 'test_targets_list.pkl'), mode='wb') as file:
+        with open(os.path.join(self.data_save_path, 'mimic_test', 'targets_list.pkl'), mode='wb') as file:
             pickle.dump(targets_dict_test, file)
-        with open(os.path.join(self.data_save_path, 'test_pre_seq_list.pkl'), mode='wb') as file:
+        with open(os.path.join(self.data_save_path, 'mimic_test', 'pre_seq_list.pkl'), mode='wb') as file:
             pickle.dump(pre_seq_dict_test, file)
-        with open(os.path.join(self.data_save_path, 'test_post_seq_list.pkl'), mode='wb') as file:
+        with open(os.path.join(self.data_save_path, 'mimic_test', 'post_seq_list.pkl'), mode='wb') as file:
             pickle.dump(post_seq_dict_test, file)
-        with open(os.path.join(self.data_save_path, 'test_active_meds_list.pkl'), mode='wb') as file:
+        with open(os.path.join(self.data_save_path, 'mimic_test', 'active_meds_list.pkl'), mode='wb') as file:
             pickle.dump(active_meds_dict_test, file)
-        with open(os.path.join(self.data_save_path, 'test_depa_list.pkl'), mode='wb') as file:
+        with open(os.path.join(self.data_save_path, 'mimic_test', 'depa_list.pkl'), mode='wb') as file:
             pickle.dump(depa_dict_test, file)
-        with open(os.path.join(self.data_save_path, 'test_enc_list.pkl'), mode='wb') as file:
+        with open(os.path.join(self.data_save_path, 'mimic_test', 'enc_list.pkl'), mode='wb') as file:
             pickle.dump(enc_test, file)
 
 
