@@ -13,7 +13,8 @@ from gensim.sklearn_api import LsiTransformer, W2VTransformer
 from matplotlib import pyplot as plt
 from sklearn.compose import ColumnTransformer
 from sklearn.feature_extraction.text import CountVectorizer, TfidfTransformer
-from sklearn.model_selection import train_test_split, TimeSeriesSplit
+from sklearn.model_selection import (ShuffleSplit, TimeSeriesSplit,
+                                     train_test_split)
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import FunctionTransformer, LabelEncoder
 from tensorflow import keras, test
@@ -45,9 +46,10 @@ class data:
     Functions related to data loading and preparation.
     '''
 
-    def __init__(self, datadir, mode):
+    def __init__(self, datadir, mode, keep_time_order=True):
         # Prepare the data paths given a directory.
         self.mode = mode
+        self.keep_time_order = keep_time_order
         # File names correspond to what is created by the preprocessor.
         # Definitions file allows matching drug ids to drug names
         self.definitions_file = os.path.join(
@@ -94,8 +96,12 @@ class data:
         with open(self.activemeds_file, mode='rb') as file:
             self.active_meds = pickle.load(file)
         print('Loading active classes...')
-        with open(self.activeclasses_file, mode='rb') as file:
-            self.active_classes = pickle.load(file)
+        try:
+            with open(self.activeclasses_file, mode='rb') as file:
+                self.active_classes = pickle.load(file)
+            self.use_classes = True
+        except:
+            self.use_classes = False
         print('Loading departments...')
         with open(self.depa_file, mode='rb') as file:
             self.depas = pickle.load(file)
@@ -136,13 +142,17 @@ class data:
     def split(self):
         print('Splitting encounters into train and val sets...')
         self.enc_train, self.enc_val = train_test_split(
-            self.enc, shuffle=False, test_size=0.25)
+            self.enc, shuffle=not self.keep_time_order, test_size=0.25)
 
     def cross_val_split(self, n_folds):
         print('Splitting encounters into train and validation sets for {} cross-validation folds...'.format(n_folds))
         self.enc_train_list = []
         self.enc_val_list = []
-        for train_indices, val_indices in TimeSeriesSplit(n_splits=n_folds).split(self.enc):
+        if self.keep_time_order:
+            splitter = TimeSeriesSplit(n_splits=n_folds)
+        else:
+            splitter = ShuffleSplit(n_splits=n_folds)
+        for train_indices, val_indices in splitter.split(self.enc):
             self.enc_train_list.append([self.enc[i] for i in train_indices])
             self.enc_val_list.append([self.enc[i] for i in val_indices])
 
@@ -178,8 +188,11 @@ class data:
             seq for enc in self.enc_train for seq in self.post_seqs[enc]]
         self.active_meds_train = [
             active_med for enc in self.enc_train for active_med in self.active_meds[enc]]
-        self.active_classes_train = [
-            active_class for enc in self.enc_train for active_class in self.active_classes[enc]]
+        if self.use_classes:
+            self.active_classes_train = [
+                active_class for enc in self.enc_train for active_class in self.active_classes[enc]]
+        else:
+            self.active_classes_train = None
         self.depa_train = [[str(dep) for dep in depa]
                            for enc in self.enc_train for depa in self.depas[enc]]
 
@@ -198,8 +211,11 @@ class data:
                 self.post_seqs[enc], self.targets[enc]) if target in unique_targets_train]
             self.active_meds_val = [active_med for enc in self.enc_val for active_med, target in zip(
                 self.active_meds[enc], self.targets[enc]) if target in unique_targets_train]
-            self.active_classes_val = [active_class for enc in self.enc_val for active_class, target in zip(
-                self.active_classes[enc], self.targets[enc]) if target in unique_targets_train]
+            if self.use_classes:
+                self.active_classes_val = [active_class for enc in self.enc_val for active_class, target in zip(
+                    self.active_classes[enc], self.targets[enc]) if target in unique_targets_train]
+            else:
+                self.active_classes_val = None
             self.depa_val = [[str(dep) for dep in depa] for enc in self.enc_val for depa, target in zip(
                 self.depas[enc], self.targets[enc]) if target in unique_targets_train]
         else:
@@ -213,11 +229,16 @@ class data:
         if shuffle_train_set:
             # Initial shuffle of training set
             print('Shuffling training set...')
-            shuffled = list(zip(self.targets_train, self.pre_seq_train, self.post_seq_train,
-                                self.active_meds_train, self.active_classes_train, self.depa_train))
-            random.shuffle(shuffled)
-            self.targets_train, self.pre_seq_train, self.post_seq_train, self.active_meds_train, self.active_classes_train, self.depa_train = zip(
-                *shuffled)
+            if self.use_classes:
+                shuffled = list(zip(self.targets_train, self.pre_seq_train, self.post_seq_train,
+                                    self.active_meds_train, self.active_classes_train, self.depa_train))
+                random.shuffle(shuffled)
+                self.targets_train, self.pre_seq_train, self.post_seq_train, self.active_meds_train, self.active_classes_train, self.depa_train = zip(*shuffled)
+            else:
+                shuffled = list(zip(self.targets_train, self.pre_seq_train, self.post_seq_train,
+                                    self.active_meds_train, self.depa_train))
+                random.shuffle(shuffled)
+                self.targets_train, self.pre_seq_train, self.post_seq_train, self.active_meds_train, self.depa_train = zip(*shuffled)
 
        # Print out the number of samples obtained to make sure they match.
         print('Training set: Obtained {} profiles, {} targets, {} pre sequences, {} post sequences, {} active meds, {} active classes, {} depas and {} encs.'.format(len(self.profiles_train), len(
@@ -296,8 +317,12 @@ class transformation_pipelines:
     # column transformer
     def prepare_pse_data(self, active_meds, active_classes, departments):
         print('Preparing data for PSE...')
-        pse_data = [[am, ac, de] for am, ac, de in zip(
-            active_meds, active_classes, departments)]
+        if active_classes == None:
+            pse_data = [[am, de] for am, de in zip(
+                active_meds, departments)]
+        else:
+            pse_data = [[am, ac, de] for am, ac, de in zip(
+                active_meds, active_classes, departments)]
         self.n_pse_columns = len(pse_data[0])
         return pse_data
 
@@ -381,6 +406,10 @@ class TransformedGenerator(keras.utils.Sequence):
         self.X_w2v_post = X_w2v_post
         self.X_am = X_am
         self.X_ac = X_ac
+        if self.X_ac == None:
+            self.use_classes = False
+        else:
+            self.use_classes = True
         self.X_depa = X_depa
         # Transformation parameters
         self.w2v_embedding_dim = w2v_embedding_dim
@@ -428,12 +457,17 @@ class TransformedGenerator(keras.utils.Sequence):
         # Transform the active meds, pharmacological classes and department into a multi-hot vector
         # Get batches
         batch_am = self.X_am[idx * self.batch_size:(idx+1) * self.batch_size]
-        batch_ac = self.X_ac[idx * self.batch_size:(idx+1) * self.batch_size]
+        if self.use_classes:
+            batch_ac = self.X_ac[idx * self.batch_size:(idx+1) * self.batch_size]
         batch_depa = self.X_depa[idx *
                                  self.batch_size:(idx+1) * self.batch_size]
         # Prepare the batches for input into the ColumnTransformer step of the pipeline
-        batch_pse = [[bp, bc, bd]
-                     for bp, bc, bd in zip(batch_am, batch_ac, batch_depa)]
+        if self.use_classes:
+            batch_pse = [[bp, bc, bd]
+                         for bp, bc, bd in zip(batch_am, batch_ac, batch_depa)]
+        else:
+            batch_pse = [[bp, bd]
+                     for bp, bd in zip(batch_am, batch_depa)]
         # Transform
         transformed_pse = self.pse.transform(batch_pse)
         X['pse_input'] = transformed_pse
@@ -455,11 +489,18 @@ class TransformedGenerator(keras.utils.Sequence):
         # Shuffle after each training epoch so that the data is not always
         # seen in the same order
         if self.shuffle == True:
-            shuffled = list(zip(self.y, self.X_w2v_pre,
-                                self.X_w2v_post, self.X_am, self.X_ac, self.X_depa))
-            random.shuffle(shuffled)
-            self.y, self.X_w2v_pre, self.X_w2v_post, self.X_am, self.X_ac, self.X_depa = zip(
-                *shuffled)
+            if self.use_classes:
+                shuffled = list(zip(self.y, self.X_w2v_pre,
+                                    self.X_w2v_post, self.X_am, self.X_ac, self.X_depa))
+                random.shuffle(shuffled)
+                self.y, self.X_w2v_pre, self.X_w2v_post, self.X_am, self.X_ac, self.X_depa = zip(
+                    *shuffled)
+            else:
+                shuffled = list(zip(self.y, self.X_w2v_pre,
+                                    self.X_w2v_post, self.X_am, self.X_depa))
+                random.shuffle(shuffled)
+                self.y, self.X_w2v_pre, self.X_w2v_post, self.X_am, self.X_depa = zip(
+                    *shuffled)
 
 
 class neural_network:
