@@ -502,17 +502,31 @@ class TransformedGenerator(keras.utils.Sequence):
         # seen in the same order
         if self.shuffle == True:
             if self.use_classes:
-                shuffled = list(zip(self.y, self.X_w2v_pre,
-                                    self.X_w2v_post, self.X_am, self.X_ac, self.X_depa))
-                random.shuffle(shuffled)
-                self.y, self.X_w2v_pre, self.X_w2v_post, self.X_am, self.X_ac, self.X_depa = zip(
+                if self.mode == 'prospective':
+                    shuffled = list(zip(self.y, self.X_w2v_pre,
+                                    self.X_am, self.X_ac, self.X_depa))
+                    random.shuffle(shuffled)
+                    self.y, self.X_w2v_pre, self.X_am, self.X_ac, self.X_depa = zip(
                     *shuffled)
+                elif self.mode == 'retrospective':
+                    shuffled = list(zip(self.y, self.X_w2v_pre,
+                                        self.X_w2v_post, self.X_am, self.X_ac, self.X_depa))
+                    random.shuffle(shuffled)
+                    self.y, self.X_w2v_pre, self.X_w2v_post, self.X_am, self.X_ac, self.X_depa = zip(
+                        *shuffled)
             else:
-                shuffled = list(zip(self.y, self.X_w2v_pre,
-                                    self.X_w2v_post, self.X_am, self.X_depa))
-                random.shuffle(shuffled)
-                self.y, self.X_w2v_pre, self.X_w2v_post, self.X_am, self.X_depa = zip(
-                    *shuffled)
+                if self.mode == 'prospective':
+                    shuffled = list(zip(self.y, self.X_w2v_pre,
+                                        self.X_am, self.X_depa))
+                    random.shuffle(shuffled)
+                    self.y, self.X_w2v_pre, self.X_am, self.X_depa = zip(
+                        *shuffled)
+                elif self.mode == 'retrospective':
+                    shuffled = list(zip(self.y, self.X_w2v_pre,
+                                        self.X_w2v_post, self.X_am, self.X_depa))
+                    random.shuffle(shuffled)
+                    self.y, self.X_w2v_pre, self.X_w2v_post, self.X_am, self.X_depa = zip(
+                        *shuffled)
 
 
 class neural_network:
