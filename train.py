@@ -49,6 +49,8 @@ except:
         # Execution parameters
         # retrospective for medication profile analysis, prospective for order prediction
         'MODE': 'retrospective',
+        # Keep chronological sequence when splitting for validation
+        'KEEP_TIME_ORDER':True,
         # True to do cross-val, false to do single training run with validation
         'CROSS_VALIDATE': False,
         'N_CROSS_VALIDATION_FOLDS': 5,
@@ -152,7 +154,7 @@ in_ipynb = check_ipynb().is_inipynb()
 # %%
 # Load the data
 
-d = data(param.DATA_DIR, param.MODE)
+d = data(param.DATA_DIR, param.MODE, param.KEEP_TIME_ORDER)
 
 if os.path.isfile(os.path.join(save_path, 'sampled_encs.pkl')):
     enc_file = os.path.join(save_path, 'sampled_encs.pkl')
