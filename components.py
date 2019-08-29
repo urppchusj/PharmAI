@@ -139,19 +139,19 @@ class data:
         else:
             self.definitions = None
 
-    def split(self):
+    def split(self, split_seed=None):
         print('Splitting encounters into train and val sets...')
         self.enc_train, self.enc_val = train_test_split(
-            self.enc, shuffle=not self.keep_time_order, test_size=0.25)
+            self.enc, shuffle=not self.keep_time_order, random_state=split_seed, test_size=0.25)
 
-    def cross_val_split(self, n_folds):
+    def cross_val_split(self, n_folds, split_seed=None):
         print('Splitting encounters into train and validation sets for {} cross-validation folds...'.format(n_folds))
         self.enc_train_list = []
         self.enc_val_list = []
         if self.keep_time_order:
             splitter = TimeSeriesSplit(n_splits=n_folds)
         else:
-            splitter = ShuffleSplit(n_splits=n_folds)
+            splitter = ShuffleSplit(n_splits=n_folds, random_state=split_seed)
         for train_indices, val_indices in splitter.split(self.enc):
             self.enc_train_list.append([self.enc[i] for i in train_indices])
             self.enc_val_list.append([self.enc[i] for i in val_indices])
@@ -192,7 +192,7 @@ class data:
             self.active_classes_train = [
                 active_class for enc in self.enc_train for active_class in self.active_classes[enc]]
         else:
-            self.active_classes_train = None
+            self.active_classes_train = []
         self.depa_train = [[str(dep) for dep in depa]
                            for enc in self.enc_train for depa in self.depas[enc]]
 
@@ -215,7 +215,7 @@ class data:
                 self.active_classes_val = [active_class for enc in self.enc_val for active_class, target in zip(
                     self.active_classes[enc], self.targets[enc]) if target in unique_targets_train]
             else:
-                self.active_classes_val = None
+                self.active_classes_val = []
             self.depa_val = [[str(dep) for dep in depa] for enc in self.enc_val for depa, target in zip(
                 self.depas[enc], self.targets[enc]) if target in unique_targets_train]
         else:
@@ -230,15 +230,27 @@ class data:
             # Initial shuffle of training set
             print('Shuffling training set...')
             if self.use_classes:
-                shuffled = list(zip(self.targets_train, self.pre_seq_train, self.post_seq_train,
-                                    self.active_meds_train, self.active_classes_train, self.depa_train))
-                random.shuffle(shuffled)
-                self.targets_train, self.pre_seq_train, self.post_seq_train, self.active_meds_train, self.active_classes_train, self.depa_train = zip(*shuffled)
+                if self.mode == 'prospective':
+                    shuffled = list(zip(self.targets_train, self.pre_seq_train,
+                                        self.active_meds_train, self.active_classes_train, self.depa_train))
+                    random.shuffle(shuffled)
+                    self.targets_train, self.pre_seq_train, self.active_meds_train, self.active_classes_train, self.depa_train = zip(*shuffled)
+                elif self.mode == 'retrospective':
+                    shuffled = list(zip(self.targets_train, self.pre_seq_train, self.post_seq_train,
+                                        self.active_meds_train, self.active_classes_train, self.depa_train))
+                    random.shuffle(shuffled)
+                    self.targets_train, self.pre_seq_train, self.post_seq_train, self.active_meds_train, self.active_classes_train, self.depa_train = zip(*shuffled)
             else:
-                shuffled = list(zip(self.targets_train, self.pre_seq_train, self.post_seq_train,
-                                    self.active_meds_train, self.depa_train))
-                random.shuffle(shuffled)
-                self.targets_train, self.pre_seq_train, self.post_seq_train, self.active_meds_train, self.depa_train = zip(*shuffled)
+                if self.mode == 'prospective':
+                    shuffled = list(zip(self.targets_train, self.pre_seq_train,
+                                        self.active_meds_train, self.depa_train))
+                    random.shuffle(shuffled)
+                    self.targets_train, self.pre_seq_train, self.active_meds_train, self.depa_train = zip(*shuffled)
+                elif self.mode == 'retrospective':
+                    shuffled = list(zip(self.targets_train, self.pre_seq_train, self.post_seq_train,
+                                        self.active_meds_train, self.depa_train))
+                    random.shuffle(shuffled)
+                    self.targets_train, self.pre_seq_train, self.post_seq_train, self.active_meds_train, self.depa_train = zip(*shuffled)
 
        # Print out the number of samples obtained to make sure they match.
         print('Training set: Obtained {} profiles, {} targets, {} pre sequences, {} post sequences, {} active meds, {} active classes, {} depas and {} encs.'.format(len(self.profiles_train), len(
@@ -317,7 +329,7 @@ class transformation_pipelines:
     # column transformer
     def prepare_pse_data(self, active_meds, active_classes, departments):
         print('Preparing data for PSE...')
-        if active_classes == None:
+        if len(active_classes) == 0:
             pse_data = [[am, de] for am, de in zip(
                 active_meds, departments)]
         else:
@@ -406,7 +418,7 @@ class TransformedGenerator(keras.utils.Sequence):
         self.X_w2v_post = X_w2v_post
         self.X_am = X_am
         self.X_ac = X_ac
-        if self.X_ac == None:
+        if len(self.X_ac) == 0:
             self.use_classes = False
         else:
             self.use_classes = True
@@ -607,7 +619,10 @@ class neural_network:
         w2v_pre = Dropout(dropout)(w2v_pre)
         w2v_pre = Dense(sequence_size, activation='relu')(w2v_pre)
         w2v_pre = Dropout(dropout)(w2v_pre)
-        to_concat_sequence.append(w2v_pre)
+        if self.mode == 'retrospective':
+            to_concat_sequence.append(w2v_pre)
+        elif self.mode == 'prospective':
+            to_concat.append(w2v_pre)
         inputs.append(w2v_pre_input)
 
         # The pre-target sequence word2vec inputs and layers before concatenation

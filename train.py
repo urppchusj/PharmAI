@@ -12,6 +12,7 @@
 import os
 import pathlib
 import pickle
+import random
 from datetime import datetime
 from multiprocessing import cpu_count
 from types import SimpleNamespace
@@ -30,7 +31,7 @@ from components import (TransformedGenerator, check_ipynb, data,
 # Save path and parameter loading
 
 # Empty string to start training a new model, else will load parameters from this directory; will start a new model if can't load.
-LOAD_FROM = 'retrospective/20190827-2235'
+LOAD_FROM = 'prospective/20190829-1302'
 
 # Check if can load hyperparameters from specified dir, else create new dir
 try:
@@ -43,35 +44,37 @@ try:
     print('Parameters of previous training successfully loaded. Resuming...')
 except:
     new_model = True
+    random_seed = random.randint(0,10000)
     # Parameters for new model
     parameters_dict = {
 
         # Execution parameters
         # retrospective for medication profile analysis, prospective for order prediction
-        'MODE': 'retrospective',
+        'MODE': 'prospective',
         # Keep chronological sequence when splitting for validation
-        'KEEP_TIME_ORDER':True,
+        'KEEP_TIME_ORDER':False, # True for local dataset, False for mimic
+        'VAL_SPLIT_SEED':random_seed, # Seed to get identical splits when resuming training if KEEP_TIME_ORDER is False
         # True to do cross-val, false to do single training run with validation
         'CROSS_VALIDATE': False,
         'N_CROSS_VALIDATION_FOLDS': 5,
         # Validate when doing a single training run. Cross-validation has priority over this
-        'VALIDATE': False,
+        'VALIDATE': True,
 
         # Data parameters
         # False prepares all data, True samples a number of encounters for faster execution, useful for debugging or testing
         'RESTRICT_DATA': False,
         'RESTRICT_SAMPLE_SIZE':1000, # The number of encounters to sample in the restricted data.
-        'DATA_DIR': '5yr',  # Where to find the preprocessed data.
+        'DATA_DIR': 'mimic',  # Where to find the preprocessed data.
 
         # Word2vec parameters
-        'W2V_ALPHA': 0.013,
-        'W2V_ITER': 32,
-        'W2V_EMBEDDING_DIM': 128,
-        'W2V_HS': 0,
-        'W2V_SG': 0,
+        'W2V_ALPHA': 0.013, # for local dataset 0.013, for mimic 0.013
+        'W2V_ITER': 32, # for local dataset 32, for mimic 32
+        'W2V_EMBEDDING_DIM': 64, # for local dataset 128, for mimic 64
+        'W2V_HS': 0, # for local dataset 0, for mimic 0
+        'W2V_SG': 1, # for local dataset 0, for mimic 1
         'W2V_MIN_COUNT': 5,
         # Exports only in a single training run, no effect in cross-validation
-        'EXPORT_W2V_EMBEDDINGS': True,
+        'EXPORT_W2V_EMBEDDINGS': False,
 
         # Profile state encoder (PSE) parameters
         'USE_LSI': False,  # False: encode profile state as multi-hot. True: perform Tf-idf then tsvd on the profile state
@@ -84,12 +87,12 @@ except:
         'N_PSE_DENSE': 0,
         # Number of batchnorm/dense/dropout layers after concatenation (minimum 1 not included in this count)
         'N_DENSE': 2,
-        'LSTM_SIZE': 512,
-        'DENSE_PSE_SIZE': 256,
-        'CONCAT_LSTM_SIZE': 512,
-        'CONCAT_TOTAL_SIZE': 512,
-        'DENSE_SIZE': 128,
-        'DROPOUT': 0.3,
+        'LSTM_SIZE': 128, # 512 for retrospective, 128 for prospective
+        'DENSE_PSE_SIZE': 128, # 256 for retrospective, 128 for prospective
+        'CONCAT_LSTM_SIZE': 512, # 512 for retrospective, irrelevant for prospective
+        'CONCAT_TOTAL_SIZE': 256, # 512 for retrospective, 256 for prospective
+        'DENSE_SIZE': 256, # 128 for retrospective, 256 for prospective
+        'DROPOUT': 0.2, # 0.3 for retrospective, 0.2 for prospective
         'L2_REG': 0,
         'SEQUENCE_LENGTH': 30,
 
@@ -98,8 +101,8 @@ except:
         'MAX_TRAINING_EPOCHS':1000, # Default 1000, should never get there, reduce for faster execution when testing or debugging.
         'SINGLE_RUN_EPOCHS':16, # How many epochs to train when doing a single run without validation
         'LEARNING_RATE_SCHEDULE':{14:1e-4}, # Dict where keys are epoch index (epoch - 1) where the learning rate decreases and values are the new learning rate.
-        'N_TRAINING_STEPS_PER_EPOCH': 1000,
-        'N_VALIDATION_STEPS_PER_EPOCH': 1000,
+        'N_TRAINING_STEPS_PER_EPOCH': None, # 1000 for retrospective, None for prospective (use whole generator)
+        'N_VALIDATION_STEPS_PER_EPOCH': None, # 1000 for retrospective, None for prospective (use whole generator)
     }
     param = SimpleNamespace(**parameters_dict)
 
@@ -173,9 +176,9 @@ else:
 # prepare the appropriate number of folds
 
 if param.CROSS_VALIDATE:
-    d.cross_val_split(param.N_CROSS_VALIDATION_FOLDS)
+    d.cross_val_split(param.N_CROSS_VALIDATION_FOLDS, split_seed=param.VAL_SPLIT_SEED)
 elif param.VALIDATE:
-    d.split()
+    d.split(split_seed=param.VAL_SPLIT_SEED)
 
 # %% [markdown]
 # ## Training execution
