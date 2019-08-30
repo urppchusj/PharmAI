@@ -34,8 +34,8 @@ from components import (TransformedGenerator, check_ipynb, data,
 # loaded. Must be a subdirectory of "experiments". Will save there.
 # LOAD_TEST_DATA_FROM specifies where to find the test set data.
 # Must be a subdirectory of "preprocessed_data".
-LOAD_MODEL_FROM = 'retrospective/32 - trained full model'
-LOAD_TEST_DATA_FROM = 'valid'
+LOAD_MODEL_FROM = 'prospective/mimic_model'
+LOAD_TEST_DATA_FROM = 'mimic_test'
 
 save_path = os.path.join('experiments', LOAD_MODEL_FROM)
 with open(os.path.join(save_path, 'hp.pkl'), mode='rb') as file:
@@ -178,10 +178,12 @@ print('Weighted average precision score for present labels: {:.3f}'.format(p_we)
 print('Weighted average recall score for present labels: {:.3f}'.format(r_we))
 
 #%%
-department_data = pd.read_csv('data/depas.csv', sep=';')
-department_data.set_index('Numéro', inplace=True)
-department_cat_dict = department_data['Catégorie'].to_dict()
+department_data = pd.read_csv(os.path.join(os.getcwd(), 'preprocessed_data', param.MODE, LOAD_TEST_DATA_FROM, 'depas.csv'), sep=';')
+department_data.set_index('orig_depa', inplace=True)
+department_cat_dict = department_data['cat_depa'].to_dict()
+# Account for errors in data
 department_cat_dict['null'] = 'null'
+department_cat_dict['nan'] = 'null'
 categorized_departments = [department_cat_dict[department[0] if len(department)>0 else 'null'] for department in filtered_depas]
 unique_categorized_departments = list(set(categorized_departments))
 
@@ -190,8 +192,11 @@ unique_categorized_departments = list(set(categorized_departments))
 # category. Make a dataframe with this.
 results_by_depa_dict = {
 	'Department':[],
+	'Dummy top 1':[],
 	'Top 1 accuracy':[],
+	'Dummy top 10':[],
 	'Top 10 accuracy':[],
+	'Dummy top 30':[],
 	'Top 30 accuracy':[]
 }
 for department in unique_categorized_departments:
@@ -200,23 +205,55 @@ for department in unique_categorized_departments:
 	print('\n\nResults for category: {}'.format(department))
 	indices = [i for i, value in enumerate(categorized_departments) if value == department]
 	selected_pre_seqs = [filtered_pre_seqs[i] for i in indices]
-	selected_post_seqs = [filtered_post_seqs[i] for i in indices]
+	if param.MODE == 'retrospective':
+		selected_post_seqs = [filtered_post_seqs[i] for i in indices]
+	elif param.MODE == 'prospective':
+		selected_post_seqs = []
 	selected_active_meds = [filtered_active_meds[i] for i in indices]
-	selected_active_classes = [filtered_active_classes[i] for i in indices]
+	if len(filtered_active_classes) > 0:
+		selected_active_classes = [filtered_active_classes[i] for i in indices]
+	else:
+		selected_active_classes = []
 	selected_depa = [filtered_depas[i] for i in indices]
 	selected_targets = [filtered_targets[i] for i in indices]
 	eval_generator = TransformedGenerator(param.MODE, w2v_step, param.USE_LSI, pse, le, selected_targets, selected_pre_seqs, selected_post_seqs, selected_active_meds, selected_active_classes, selected_depa, param.W2V_EMBEDDING_DIM, param.SEQUENCE_LENGTH, param.BATCH_SIZE)
 	results = model.evaluate_generator(eval_generator, verbose=1)
 	predictions = model.predict_generator(eval_generator, verbose=1)
-	print('Evaluation results')
+	# Compute the baseline predictions by frequency-based prediction
+	s = pd.Series(selected_targets)
+	counts = s.value_counts()
+	tops = counts.index.tolist()
+	top1 = tops[0]
+	top10 = tops[0:10]
+	top30 = tops[0:30]
+	intop1, intop10, intop30 = 0,0,0
+	for target in selected_targets:
+		if target in top1:
+			intop1 += 1 
+		if target in top10:
+			intop10 += 1 
+		if target in top30:
+			intop30 += 1 
+		denum = len(selected_targets)
+	top1_baseline = intop1/denum
+	top10_baseline = intop10/denum
+	top30_baseline = intop30/denum
+	print('Baseline accuracy by dummy classifier')
+	print('Baseline train-test top 1 : {:.2f}%'.format(100*intop1/denum))
+	print('Baseline train-test top 10 : {:.2f}%'.format(100*intop10/denum))
+	print('Baseline train-test top 30 : {:.2f}%'.format(100*intop30/denum))
+	print('\n\nEvaluation results')
 	print('Predicting on {} samples, {:.2f} % of {} samples.'.format(len(selected_targets), (100*len(selected_targets))/len(filtered_targets), len(filtered_targets)))
 	print('Predictions for {} classes'.format(len(le.classes_)))
 	print('{} classes reprensented in targets'.format(len(set(selected_targets))))
 	for metric, result in zip(model.metrics_names, results):
 		print('Metric: {}   Score: {:.5f}'.format(metric,result))
 	results_by_depa_dict['Department'].append(department)
+	results_by_depa_dict['Dummy top 1'].append(top1_baseline)
 	results_by_depa_dict['Top 1 accuracy'].append(results[1])
+	results_by_depa_dict['Dummy top 10'].append(top10_baseline)
 	results_by_depa_dict['Top 10 accuracy'].append(results[2])
+	results_by_depa_dict['Dummy top 30'].append(top30_baseline)
 	results_by_depa_dict['Top 30 accuracy'].append(results[3])
 	prediction_labels = le.inverse_transform([np.argmax(prediction) for prediction in predictions])
 	p_we, r_we, _, _ = precision_recall_fscore_support(selected_targets, prediction_labels, average='weighted')
@@ -232,8 +269,10 @@ results_by_depa_df.sort_values(by='Top 1 accuracy', inplace=True)
 results_by_depa_df = results_by_depa_df.stack().reset_index()
 results_by_depa_df.rename(columns={'level_1':'Metric', 0:'Result'}, inplace=True)
 sns.set(style='darkgrid')
+a4_dims = (11.7, 8.27)
+fig, ax = plt.subplots(figsize=a4_dims)
 plt.xticks(rotation=60, ha='right')
-sns.barplot(x='Department', y='Result', hue='Metric', data=results_by_depa_df)
+sns.barplot(ax=ax, x='Department', y='Result', hue='Metric', data=results_by_depa_df)
 if in_ipynb:
 	plt.show()
 else:
