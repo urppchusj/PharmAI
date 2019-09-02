@@ -13,10 +13,12 @@ from tqdm import tqdm
 
 class preprocessor():
 
-    def __init__(self, source_file, definitions_file, restrict_data, mode):
+    def __init__(self, source_file, definitions_file, restrict_data, get_active_profiles, dict_key, mode):
 
         # Settings
         self.mode = mode
+        self.get_active_profiles = get_active_profiles
+        self.dict_key = dict_key
         self.data_save_path = os.path.join(
             os.getcwd(), 'preprocessed_data', restrict_data + 'yr_' + self.mode)
         self.profile_col_names = ['enc', 'date_beg', 'time_beg', 'date_end', 'time_end', 'medinb',
@@ -46,25 +48,26 @@ class preprocessor():
         print('Calculating synthetic features...')
         self.raw_profile_data['medinb_int'] = self.raw_profile_data['medinb'].astype(
             np.int32)
-        self.raw_profile_data['classnb'] = self.raw_profile_data['medinb_int'].map(
-            classes_data['classnb'])
-        del classes_data
-        self.raw_profile_data['class1_part'] = self.raw_profile_data['classnb'].str.slice(
-            start=0, stop=2).astype(np.int32)
-        self.raw_profile_data['class2_part'] = self.raw_profile_data['classnb'].str.slice(
-            start=3, stop=5).astype(np.int32)
-        self.raw_profile_data['class3_part'] = self.raw_profile_data['classnb'].str.slice(
-            start=6, stop=8).astype(np.int32)
-        self.raw_profile_data['class4_part'] = self.raw_profile_data['classnb'].str.slice(
-            start=9, stop=11).astype(np.int32)
-        self.raw_profile_data['class1_whole'] = self.raw_profile_data['classnb'].str.slice(
-            start=0, stop=2)
-        self.raw_profile_data['class2_whole'] = self.raw_profile_data['classnb'].str.slice(
-            start=0, stop=5)
-        self.raw_profile_data['class3_whole'] = self.raw_profile_data['classnb'].str.slice(
-            start=0, stop=8)
-        self.raw_profile_data['class4_whole'] = self.raw_profile_data['classnb'].str.slice(
-            start=0, stop=11)
+        if self.get_active_profiles:
+            self.raw_profile_data['classnb'] = self.raw_profile_data['medinb_int'].map(
+                classes_data['classnb'])
+            del classes_data
+            self.raw_profile_data['class1_part'] = self.raw_profile_data['classnb'].str.slice(
+                start=0, stop=2).astype(np.int32)
+            self.raw_profile_data['class2_part'] = self.raw_profile_data['classnb'].str.slice(
+                start=3, stop=5).astype(np.int32)
+            self.raw_profile_data['class3_part'] = self.raw_profile_data['classnb'].str.slice(
+                start=6, stop=8).astype(np.int32)
+            self.raw_profile_data['class4_part'] = self.raw_profile_data['classnb'].str.slice(
+                start=9, stop=11).astype(np.int32)
+            self.raw_profile_data['class1_whole'] = self.raw_profile_data['classnb'].str.slice(
+                start=0, stop=2)
+            self.raw_profile_data['class2_whole'] = self.raw_profile_data['classnb'].str.slice(
+                start=0, stop=5)
+            self.raw_profile_data['class3_whole'] = self.raw_profile_data['classnb'].str.slice(
+                start=0, stop=8)
+            self.raw_profile_data['class4_whole'] = self.raw_profile_data['classnb'].str.slice(
+                start=0, stop=11)
         self.raw_profile_data['datetime_beg'] = pd.to_datetime(
             self.raw_profile_data['date_beg']+' '+self.raw_profile_data['time_beg'], format='%Y%m%d %H:%M')
         self.raw_profile_data = self.raw_profile_data.drop(
@@ -79,14 +82,14 @@ class preprocessor():
             self.raw_profile_data['date_endenc']+' '+self.raw_profile_data['time_endenc'], format='%Y%m%d %H:%M')
         self.raw_profile_data = self.raw_profile_data.drop(
             ['date_endenc', 'time_endenc'], axis=1)
-        self.raw_profile_data.sort_values(['date_begenc', 'enc', 'datetime_beg', 'class1_part',
-                                           'class2_part', 'class3_part', 'class4_part'], ascending=True, inplace=True)
+        self.raw_profile_data.sort_values(['date_begenc', 'enc', 'datetime_beg'], ascending=True, inplace=True)
         self.raw_profile_data['addition_number'] = self.raw_profile_data.groupby(
             'enc').enc.rank(method='first').astype(int)
         self.raw_profile_data.set_index(
             ['enc', 'addition_number'], drop=True, inplace=True)
+        self.raw_profile_data['year'] = self.raw_profile_data['date_begenc'].apply(lambda x: x.year)
         maxyear = max(
-            self.raw_profile_data['date_begenc'].apply(lambda x: x.year))
+            self.raw_profile_data['year'])
         self.raw_profile_data = self.raw_profile_data.loc[self.raw_profile_data['date_begenc'] > datetime(
             maxyear-int(restrict_data)+1, 1, 1)].copy()
 
@@ -104,21 +107,29 @@ class preprocessor():
         # Iterate over encounters, send each encounter to self.build_enc_profiles
         for enc in tqdm(self.raw_profile_data.groupby(level='enc', sort=False)):
             enc_list.append(enc[0])
-            profiles_dict[enc[0]] = enc[1]['medinb'].tolist()
+            if self.dict_key == 'enc':
+                profiles_dict[enc[0]] = enc[1]['medinb'].tolist()
+            elif self.dict_key == 'year':
+                profiles_dict[enc[1]['year'].iloc[0]].append(enc[1]['medinb'].tolist())
             enc_profiles = self.build_enc_profiles(enc)
             # Convert each profile to list
             for profile in enc_profiles.groupby(level='profile', sort=False):
                 targets_to_append_list, pre_seq_to_append_list, post_seq_to_append_list, active_profile_to_append_list, class_1_to_append_list, class_2_to_append_list, class_3_to_append_list, class_4_to_append_list, depa_to_append_list = self.make_profile_lists(
                     profile)
-                targets_dict[enc[0]].extend(targets_to_append_list)
-                pre_seq_dict[enc[0]].extend(pre_seq_to_append_list)
-                post_seq_dict[enc[0]].extend(post_seq_to_append_list)
-                active_profiles_dict[enc[0]].extend(
-                    active_profile_to_append_list)
-                depa_dict[enc[0]].extend(depa_to_append_list)
-                for class_1_to_append, class_2_to_append, class_3_to_append, class_4_to_append in zip(class_1_to_append_list, class_2_to_append_list, class_3_to_append_list, class_4_to_append_list):
-                    active_classes_dict[enc[0]].append(list(chain.from_iterable(
-                        [class_1_to_append, class_2_to_append, class_3_to_append, class_4_to_append])))
+                if self.dict_key == 'enc':
+                    key = enc[0]
+                elif self.dict_key == 'year':
+                    key = enc[1]['year'].iloc[0]
+                targets_dict[key].extend(targets_to_append_list)
+                pre_seq_dict[key].extend(pre_seq_to_append_list)
+                post_seq_dict[key].extend(post_seq_to_append_list)
+                if self.get_active_profiles:
+                    active_profiles_dict[key].extend(
+                        active_profile_to_append_list)
+                    depa_dict[key].extend(depa_to_append_list)
+                    for class_1_to_append, class_2_to_append, class_3_to_append, class_4_to_append in zip(class_1_to_append_list, class_2_to_append_list, class_3_to_append_list, class_4_to_append_list):
+                        active_classes_dict[key].append(list(chain.from_iterable(
+                            [class_1_to_append, class_2_to_append, class_3_to_append, class_4_to_append])))
         print('Done!')
         return profiles_dict, targets_dict, pre_seq_dict, post_seq_dict, active_profiles_dict, active_classes_dict, depa_dict, enc_list
 
@@ -179,28 +190,29 @@ class preprocessor():
                     profile_list[::-1].index(target)
                 pre_seq = profile_list[:target_index]
                 post_seq = profile_list[target_index+1:]
-                # remove row of target from profile
-                filtered_profile = profile[1].drop(
-                    profile[1].index[target_index])
-                # select only active medications and make another list with those
-                active_profile = filtered_profile.loc[filtered_profile['active'] == 1].copy(
-                )
-                # make sets of contents of active profile to prepare for multi-hot encoding
-                active_profile_to_append = active_profile['medinb'].tolist()
-                class_1_to_append = active_profile['class1_whole'].tolist()
-                class_2_to_append = active_profile['class2_whole'].tolist()
-                class_3_to_append = active_profile['class3_whole'].tolist()
-                class_4_to_append = active_profile['class4_whole'].tolist()
-                depa_to_append = active_profile['depa'].unique().tolist()
                 targets_list.append(target)
                 pre_seq_list.append(pre_seq)
                 post_seq_list.append(post_seq)
-                active_profile_to_append_list.append(active_profile_to_append)
-                class_1_to_append_list.append(class_1_to_append)
-                class_2_to_append_list.append(class_2_to_append)
-                class_3_to_append_list.append(class_3_to_append)
-                class_4_to_append_list.append(class_4_to_append)
-                depa_to_append_list.append(depa_to_append)
+                if self.get_active_profiles:
+                    # remove row of target from profile
+                    filtered_profile = profile[1].drop(
+                        profile[1].index[target_index])
+                    # select only active medications and make another list with those
+                    active_profile = filtered_profile.loc[filtered_profile['active'] == 1].copy(
+                    )
+                    # make sets of contents of active profile to prepare for multi-hot encoding
+                    active_profile_to_append = active_profile['medinb'].tolist()
+                    class_1_to_append = active_profile['class1_whole'].tolist()
+                    class_2_to_append = active_profile['class2_whole'].tolist()
+                    class_3_to_append = active_profile['class3_whole'].tolist()
+                    class_4_to_append = active_profile['class4_whole'].tolist()
+                    depa_to_append = active_profile['depa'].unique().tolist()
+                    active_profile_to_append_list.append(active_profile_to_append)
+                    class_1_to_append_list.append(class_1_to_append)
+                    class_2_to_append_list.append(class_2_to_append)
+                    class_3_to_append_list.append(class_3_to_append)
+                    class_4_to_append_list.append(class_4_to_append)
+                    depa_to_append_list.append(depa_to_append)
         elif self.mode == 'prospective':
             # make a list with all medications in profile
             mask = profile[1].index.get_level_values(
@@ -209,26 +221,27 @@ class preprocessor():
             pre_seq = profile[1]['medinb'].tolist()
             target_index = len(pre_seq) - 1 - pre_seq[::-1].index(target)
             pre_seq.pop(target_index)
-            # remove row of target from profile
-            filtered_profile = profile[1].drop(profile[1].index[target_index])
-            # select only active medications and make another list with those
-            active_profile = filtered_profile.loc[filtered_profile['active'] == 1].copy(
-            )
-            # make lists of contents of active profile to prepare for multi-hot encoding
-            active_profile_to_append = active_profile['medinb'].tolist()
-            class_1_to_append = active_profile['class1_whole'].tolist()
-            class_2_to_append = active_profile['class2_whole'].tolist()
-            class_3_to_append = active_profile['class3_whole'].tolist()
-            class_4_to_append = active_profile['class4_whole'].tolist()
-            depa_to_append = active_profile['depa'].unique().tolist()
             targets_list.append(target)
             pre_seq_list.append(pre_seq)
-            active_profile_to_append_list.append(active_profile_to_append)
-            class_1_to_append_list.append(class_1_to_append)
-            class_2_to_append_list.append(class_2_to_append)
-            class_3_to_append_list.append(class_3_to_append)
-            class_4_to_append_list.append(class_4_to_append)
-            depa_to_append_list.append(depa_to_append)
+            if self.get_active_profiles:
+                # remove row of target from profile
+                filtered_profile = profile[1].drop(profile[1].index[target_index])
+                # select only active medications and make another list with those
+                active_profile = filtered_profile.loc[filtered_profile['active'] == 1].copy(
+                )
+                # make lists of contents of active profile to prepare for multi-hot encoding
+                active_profile_to_append = active_profile['medinb'].tolist()
+                class_1_to_append = active_profile['class1_whole'].tolist()
+                class_2_to_append = active_profile['class2_whole'].tolist()
+                class_3_to_append = active_profile['class3_whole'].tolist()
+                class_4_to_append = active_profile['class4_whole'].tolist()
+                depa_to_append = active_profile['depa'].unique().tolist()
+                active_profile_to_append_list.append(active_profile_to_append)
+                class_1_to_append_list.append(class_1_to_append)
+                class_2_to_append_list.append(class_2_to_append)
+                class_3_to_append_list.append(class_3_to_append)
+                class_4_to_append_list.append(class_4_to_append)
+                depa_to_append_list.append(depa_to_append)
         return targets_list, pre_seq_list, post_seq_list, active_profile_to_append_list, class_1_to_append_list, class_2_to_append_list, class_3_to_append_list, class_4_to_append_list, depa_to_append_list
 
     def preprocess(self):
@@ -244,14 +257,15 @@ class preprocessor():
             pickle.dump(pre_seq_dict, file)
         with open(os.path.join(self.data_save_path, 'post_seq_list.pkl'), mode='wb') as file:
             pickle.dump(post_seq_dict, file)
-        with open(os.path.join(self.data_save_path, 'active_meds_list.pkl'), mode='wb') as file:
-            pickle.dump(active_profiles_dict, file)
-        with open(os.path.join(self.data_save_path, 'active_classes_list.pkl'), mode='wb') as file:
-            pickle.dump(active_classes_dict, file)
-        with open(os.path.join(self.data_save_path, 'depa_list.pkl'), mode='wb') as file:
-            pickle.dump(depa_dict, file)
-        with open(os.path.join(self.data_save_path, 'enc_list.pkl'), mode='wb') as file:
-            pickle.dump(enc_list, file)
+        if self.get_active_profiles:
+            with open(os.path.join(self.data_save_path, 'active_meds_list.pkl'), mode='wb') as file:
+                pickle.dump(active_profiles_dict, file)
+            with open(os.path.join(self.data_save_path, 'active_classes_list.pkl'), mode='wb') as file:
+                pickle.dump(active_classes_dict, file)
+            with open(os.path.join(self.data_save_path, 'depa_list.pkl'), mode='wb') as file:
+                pickle.dump(depa_dict, file)
+            with open(os.path.join(self.data_save_path, 'enc_list.pkl'), mode='wb') as file:
+                pickle.dump(enc_list, file)
 
 
 ###########
@@ -269,12 +283,18 @@ if __name__ == '__main__':
                         default='data/20050101-20180101pet.csv', help='Source file load. Defaults to "data/20050101-20180101pet.csv".')
     parser.add_argument('--definitionsfile', metavar='Type_String', type=str, nargs="?",
                         default='data/definitions.csv', help='Source file load. Defaults to "data/definitions.csv".')
+    parser.add_argument('--noactiveprofiles', action='store_false', 
+                        help='Use this argument to prevent computing the active profile. Speeds up execution if data is to be used for datashift analysis where only profiles and sequences are used.')
+    parser.add_argument('--dictkey', metavar='Type_String', type=str, nargs="?",
+                        default='enc', help='Key in the saved dictionaires. Use "enc" for applications that split sets by encounter, use "year" for applications that split sets by year. Defaults to "enc".')
 
     args = parser.parse_args()
     mode = args.mode
     num_years = args.numyears
     source_file = args.sourcefile
     definitions_file = args.definitionsfile
+    get_active_profiles = not args.noactiveprofiles
+    dict_key = args.dictkey
 
     if mode not in ['prospective', 'retrospective']:
         print('Mode: {} not implemented. Quitting...'.format(mode))
@@ -301,5 +321,5 @@ if __name__ == '__main__':
         quit()
 
     pp = preprocessor(source_file, definitions_file,
-                      restrict_data=num_years, mode=mode)
+                      restrict_data=num_years, get_active_profiles=get_active_profiles, dict_key=dict_key, mode=mode)
     pp.preprocess()
