@@ -1,5 +1,4 @@
 import argparse as ap
-import logging
 import os
 import pathlib
 import pickle
@@ -9,10 +8,12 @@ from itertools import chain
 
 import numpy as np
 import pandas as pd
+from tqdm import tqdm
+
 
 class preprocessor():
 
-    def __init__(self, source_file, definitions_file, restrict_data, mode, logging_level=logging.DEBUG):
+    def __init__(self, source_file, definitions_file, restrict_data, mode):
 
         # Settings
         self.mode = mode
@@ -27,23 +28,8 @@ class preprocessor():
         self.definitions_dtypes = {'medinb': np.int32, 'mediname': str,
                              'genenb': str, 'genename': str, 'classnb': str, 'classename': str}
 
-        # Congigure logger
-        print('Configuring logger...')
-        self.logging_path = os.path.join(
-            os.getcwd(), 'logs', 'preprocessing', self.mode)
-        pathlib.Path(self.logging_path).mkdir(parents=True, exist_ok=True)
-        logging.basicConfig(
-            level=logging_level,
-            format="%(asctime)s [%(levelname)s]  %(message)s",
-            handlers=[
-                logging.FileHandler(os.path.join(
-                    self.logging_path, datetime.now().strftime('%Y%m%d-%H%M') + '.log')),
-                logging.StreamHandler()
-            ])
-        logging.debug('Logger successfully configured.')
-
         # Load raw data
-        logging.info('Loading data...')
+        print('Loading data...')
         self.raw_profile_data = pd.read_csv(
             source_file, sep=';', names=self.profile_col_names, index_col=None, dtype=self.profile_dtypes)
         classes_data = pd.read_csv(
@@ -57,7 +43,7 @@ class preprocessor():
         Calculate addition numbers which be used later for sequence generation
         Drop data that is not useful anymore
         '''
-        logging.info('Calculating synthetic features...')
+        print('Calculating synthetic features...')
         self.raw_profile_data['medinb_int'] = self.raw_profile_data['medinb'].astype(
             np.int32)
         self.raw_profile_data['classnb'] = self.raw_profile_data['medinb_int'].map(
@@ -106,7 +92,7 @@ class preprocessor():
 
     def get_profiles(self):
         # Rebuild profiles at every addition
-        logging.info('Recreating profiles... (takes a while)')
+        print('Recreating profiles... (takes a while)')
         profiles_dict = defaultdict(list)
         targets_dict = defaultdict(list)
         pre_seq_dict = defaultdict(list)
@@ -115,17 +101,13 @@ class preprocessor():
         active_classes_dict = defaultdict(list)
         depa_dict = defaultdict(list)
         enc_list = []
-        # Prepare a variable of the number of encounters in the dataset
-        length = self.raw_profile_data.index.get_level_values(0).nunique()
         # Iterate over encounters, send each encounter to self.build_enc_profiles
-        for n, enc in zip(range(0, length), self.raw_profile_data.groupby(level='enc', sort=False)):
+        for enc in tqdm(self.raw_profile_data.groupby(level='enc', sort=False)):
             enc_list.append(enc[0])
             profiles_dict[enc[0]] = enc[1]['medinb'].tolist()
             enc_profiles = self.build_enc_profiles(enc)
             # Convert each profile to list
             for profile in enc_profiles.groupby(level='profile', sort=False):
-                logging.info('Handling encounter number {} profile number {}: {:.2f} %\r'.format(
-                    enc[0], profile[0], 100*n / length))
                 targets_to_append_list, pre_seq_to_append_list, post_seq_to_append_list, active_profile_to_append_list, class_1_to_append_list, class_2_to_append_list, class_3_to_append_list, class_4_to_append_list, depa_to_append_list = self.make_profile_lists(
                     profile)
                 targets_dict[enc[0]].extend(targets_to_append_list)
@@ -137,7 +119,7 @@ class preprocessor():
                 for class_1_to_append, class_2_to_append, class_3_to_append, class_4_to_append in zip(class_1_to_append_list, class_2_to_append_list, class_3_to_append_list, class_4_to_append_list):
                     active_classes_dict[enc[0]].append(list(chain.from_iterable(
                         [class_1_to_append, class_2_to_append, class_3_to_append, class_4_to_append])))
-        logging.info('Done!')
+        print('Done!')
         return profiles_dict, targets_dict, pre_seq_dict, post_seq_dict, active_profiles_dict, active_classes_dict, depa_dict, enc_list
 
     def build_enc_profiles(self, enc):
@@ -295,27 +277,27 @@ if __name__ == '__main__':
     definitions_file = args.definitionsfile
 
     if mode not in ['prospective', 'retrospective']:
-        logging.critical('Mode: {} not implemented. Quitting...'.format(mode))
+        print('Mode: {} not implemented. Quitting...'.format(mode))
         quit()
     if not int(num_years):
-        logging.critical(
+        print(
             'Argument --numyears {} is not an integer. Quitting...'.format(num_years))
         quit()
     try:
         if(not os.path.isfile(source_file)):
-            logging.critical(
+            print(
                 'Data file: {} not found. Quitting...'.format(source_file))
             quit()
     except TypeError:
-        logging.critical('Invalid data file given. Quitting...')
+        print('Invalid data file given. Quitting...')
         quit()
     try:
         if(not os.path.isfile(definitions_file)):
-            logging.critical(
+            print(
                 'Definitions file: {} not found. Quitting...'.format(definitions_file))
             quit()
     except TypeError:
-        logging.critical('Invalid data file given. Quitting...')
+        print('Invalid data file given. Quitting...')
         quit()
 
     pp = preprocessor(source_file, definitions_file,

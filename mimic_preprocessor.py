@@ -1,5 +1,4 @@
 import argparse as ap
-import logging
 import os
 import pathlib
 import pickle
@@ -9,13 +8,13 @@ from itertools import chain
 
 import numpy as np
 import pandas as pd
-
 from sklearn.model_selection import train_test_split
+from tqdm import tqdm
 
 
 class preprocessor():
 
-    def __init__(self, mode, logging_level=logging.DEBUG):
+    def __init__(self, mode):
 
         # Settings
         self.mode = mode
@@ -30,23 +29,8 @@ class preprocessor():
         admissions_dtypes = {'ROW_ID': np.int32,
             'SUBJECT_ID': str, 'HADM_ID': str, 'ADMITTIME': str}
 
-        # Congigure logger
-        print('Configuring logger...')
-        self.logging_path = os.path.join(
-            os.getcwd(), 'logs', 'preprocessing', self.mode)
-        pathlib.Path(self.logging_path).mkdir(parents=True, exist_ok=True)
-        logging.basicConfig(
-            level=logging_level,
-            format="%(asctime)s [%(levelname)s]  %(message)s",
-            handlers=[
-                    logging.FileHandler(os.path.join(
-                        self.logging_path, datetime.now().strftime('%Y%m%d-%H%M') + 'mimic.log')),
-                    logging.StreamHandler()
-                ])
-        logging.debug('Logger successfully configured.')
-
         # Load raw data
-        logging.info('Loading data...')
+        print('Loading data...')
         self.raw_profile_data = pd.read_csv(
             'mimic_data/PRESCRIPTIONS.csv', index_col='ROW_ID', dtype=profile_dtypes)
         depa_data = pd.read_csv('mimic_data/SERVICES.csv',
@@ -58,7 +42,7 @@ class preprocessor():
 
         # Calculate synthetic features
 
-        logging.info('Calculating synthetic features...')
+        print('Calculating synthetic features...')
         # Keep only drugs, remove IV fluids
         self.raw_profile_data = self.raw_profile_data.loc[self.raw_profile_data['DRUG_TYPE'] == 'MAIN'].copy(
         )
@@ -118,7 +102,7 @@ class preprocessor():
 
     def get_profiles(self):
         # Rebuild profiles at every addition
-        logging.info('Recreating profiles... (takes a while)')
+        print('Recreating profiles... (takes a while)')
         profiles_dict = defaultdict(list)
         targets_dict = defaultdict(list)
         pre_seq_dict = defaultdict(list)
@@ -126,17 +110,13 @@ class preprocessor():
         active_profiles_dict = defaultdict(list)
         depa_dict = defaultdict(list)
         enc_list = []
-        # Prepare a variable of the number of encounters in the dataset
-        length = self.raw_profile_data.index.get_level_values(0).nunique()
         # Iterate over encounters, send each encounter to self.build_enc_profiles
-        for n, enc in zip(range(0, length), self.raw_profile_data.groupby(level='enc', sort=False)):
+        for enc in tqdm(self.raw_profile_data.groupby(level='enc', sort=False)):
             enc_list.append(enc[0])
             profiles_dict[enc[0]] = enc[1]['FORMULARY_DRUG_CD'].tolist()
             enc_profiles = self.build_enc_profiles(enc)
             # Convert each profile to list
             for profile in enc_profiles.groupby(level='profile', sort=False):
-                logging.info('Handling encounter number {} profile number {}: {:.2f} %\r'.format(
-                    enc[0], profile[0], 100*n / length))
                 targets_to_append_list, pre_seq_to_append_list, post_seq_to_append_list, active_profile_to_append_list, depa_to_append_list = self.make_profile_lists(
                     profile)
                 targets_dict[enc[0]].extend(targets_to_append_list)
@@ -145,7 +125,7 @@ class preprocessor():
                 active_profiles_dict[enc[0]].extend(
                     active_profile_to_append_list)
                 depa_dict[enc[0]].extend(depa_to_append_list)
-        logging.info('Done!')
+        print('Done!')
         return profiles_dict, targets_dict, pre_seq_dict, post_seq_dict, active_profiles_dict, depa_dict, enc_list
 
     def build_enc_profiles(self, enc):
@@ -265,7 +245,8 @@ class preprocessor():
         active_meds_dict_test = {k: v for k,v in active_meds_dict.items() if k in enc_test}
         depa_dict_test = {k: v for k,v in depa_dict.items() if k in enc_test}
         # Save preprocessed data to pickle files
-        pathlib.Path(self.data_save_path).mkdir(parents=True, exist_ok=True)
+        pathlib.Path(self.data_save_path, 'mimic_train').mkdir(parents=True, exist_ok=True)
+        pathlib.Path(self.data_save_path, 'mimic_test').mkdir(parents=True, exist_ok=True)
         # Train
         with open(os.path.join(self.data_save_path, 'mimic_train', 'profiles_list.pkl'), mode='wb') as file:
             pickle.dump(profiles_dict_train, file)
@@ -310,7 +291,7 @@ if __name__ == '__main__':
     mode = args.mode
 
     if mode not in ['prospective', 'retrospective']:
-        logging.critical('Mode: {} not implemented. Quitting...'.format(mode))
+        print('Mode: {} not implemented. Quitting...'.format(mode))
         quit()
 
     pp = preprocessor(mode)
