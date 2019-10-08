@@ -64,7 +64,7 @@ except:
         # False prepares all data, True samples a number of encounters for faster execution, useful for debugging or testing
         'RESTRICT_DATA': False,
         'RESTRICT_SAMPLE_SIZE':1000, # The number of encounters to sample in the restricted data.
-        'DATA_DIR': '1yr_retrospective-autoenc',  # Where to find the preprocessed data.
+        'DATA_DIR': '1yr',  # Where to find the preprocessed data.
 
         # Word2vec parameters
         'W2V_ALPHA': 0.013, # for local dataset 0.013, for mimic 0.013

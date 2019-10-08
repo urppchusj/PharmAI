@@ -16,7 +16,7 @@ from sklearn.feature_extraction.text import CountVectorizer, TfidfTransformer
 from sklearn.model_selection import (ShuffleSplit, TimeSeriesSplit,
                                      train_test_split)
 from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import FunctionTransformer, LabelEncoder
+from sklearn.preprocessing import FunctionTransformer, LabelEncoder, MultiLabelBinarizer
 from tensorflow import keras, test, math, constant, dtypes, float32
 
 
@@ -415,14 +415,11 @@ class transformation_pipelines:
     def fitsave_labelencoder(self, save_path, targets, n_fold, mode):
 
         if mode == 'retrospective-autoenc':
-            le = CountVectorizer(lowercase=False, preprocessor=self.pse_pp, analyzer=self.pse_a, binary=True)
+            le = MultiLabelBinarizer()
         else:
             le = LabelEncoder()
         le.fit(targets)
-        if mode == 'retrospective-autoenc':
-            output_n_classes = len(le.vocabulary_)
-        else:
-            output_n_classes = len(le.classes_)
+        output_n_classes = len(le.classes_)
         joblib.dump((output_n_classes, n_fold, le),
                     os.path.join(save_path, 'le.joblib'))
         return le, output_n_classes
@@ -525,7 +522,7 @@ class TransformedGenerator(keras.utils.Sequence):
             batch_y = self.y[idx * self.batch_size:(idx+1) * self.batch_size]
             # Transform the batch
             if self.mode == 'retrospective-autoenc':
-                transformed_y = self.le.transform(batch_y).todense()
+                transformed_y = self.le.transform(batch_y)
             else:
                 transformed_y = self.le.transform(batch_y)
             y = {'main_output': transformed_y}
