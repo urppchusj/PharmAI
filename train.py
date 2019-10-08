@@ -13,6 +13,7 @@ import os
 import pathlib
 import pickle
 import random
+import warnings
 from datetime import datetime
 from multiprocessing import cpu_count
 from types import SimpleNamespace
@@ -22,7 +23,10 @@ import pandas as pd
 import tensorflow as tf
 
 from components import (TransformedGenerator, check_ipynb, data,
-                        neural_network, transformation_pipelines, visualization)
+                        neural_network, transformation_pipelines,
+                        visualization)
+
+warnings.filterwarnings('ignore',category=UserWarning)
 
 # %%[markdown]
 # ## Parameters
@@ -64,7 +68,7 @@ except:
         # False prepares all data, True samples a number of encounters for faster execution, useful for debugging or testing
         'RESTRICT_DATA': False,
         'RESTRICT_SAMPLE_SIZE':1000, # The number of encounters to sample in the restricted data.
-        'DATA_DIR': '1yr',  # Where to find the preprocessed data.
+        'DATA_DIR': '7yr',  # Where to find the preprocessed data.
 
         # Word2vec parameters
         'W2V_ALPHA': 0.013, # for local dataset 0.013, for mimic 0.013
