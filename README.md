@@ -133,6 +133,8 @@ Requires:
 - Scikit-plot
 - UMAP
 - Matplotlib
+- Pydot
+- Graphviz
 - Seaborn
 - Gensim
 - Tensorflow 1.13 or later
