@@ -242,6 +242,24 @@ class preprocessor():
                 class_3_to_append_list.append(class_3_to_append)
                 class_4_to_append_list.append(class_4_to_append)
                 depa_to_append_list.append(depa_to_append)
+        elif self.mode == 'retrospective-autoenc':
+            pre_seq = profile[1]['medinb'].tolist()
+            pre_seq_list.append(pre_seq)
+            if self.get_active_profiles:
+                active_profile = profile[1].loc[profile[1]['active'] == 1].copy()
+                # make lists of contents of active profile to prepare for multi-hot encoding
+                active_profile_to_append = active_profile['medinb'].tolist()
+                class_1_to_append = active_profile['class1_whole'].tolist()
+                class_2_to_append = active_profile['class2_whole'].tolist()
+                class_3_to_append = active_profile['class3_whole'].tolist()
+                class_4_to_append = active_profile['class4_whole'].tolist()
+                depa_to_append = active_profile['depa'].unique().tolist()
+                active_profile_to_append_list.append(active_profile_to_append)
+                class_1_to_append_list.append(class_1_to_append)
+                class_2_to_append_list.append(class_2_to_append)
+                class_3_to_append_list.append(class_3_to_append)
+                class_4_to_append_list.append(class_4_to_append)
+                depa_to_append_list.append(depa_to_append)
         return targets_list, pre_seq_list, post_seq_list, active_profile_to_append_list, class_1_to_append_list, class_2_to_append_list, class_3_to_append_list, class_4_to_append_list, depa_to_append_list
 
     def preprocess(self):
@@ -276,7 +294,7 @@ if __name__ == '__main__':
     parser = ap.ArgumentParser(
         description='Preprocess the data extracted from the pharmacy database before input into the machine learning model', formatter_class=ap.RawTextHelpFormatter)
     parser.add_argument('--mode', metavar='Type_String', type=str, nargs='?',
-                        help='Preprocessing mode. Use "prospective" to generate the preprocessed data for prediction of the next medication order. Use "retrospective" for preprocessed data for retrospective profile analysis. No default.')
+                        help='Preprocessing mode. Use "prospective" to generate the preprocessed data for prediction of the next medication order. Use "retrospective" for preprocessed data for retrospective profile analysis. Use "retrospective-autoenc" for preprocessed data for the autoencoder. No default.')
     parser.add_argument('--numyears', metavar='Type_String', type=str, nargs="?",
                         default='5', help='Number of years in the data to process. Defaults to 5')
     parser.add_argument('--sourcefile', metavar='Type_String', type=str, nargs="?",
@@ -293,10 +311,10 @@ if __name__ == '__main__':
     num_years = args.numyears
     source_file = args.sourcefile
     definitions_file = args.definitionsfile
-    get_active_profiles = not args.noactiveprofiles
+    get_active_profiles = args.noactiveprofiles
     dict_key = args.dictkey
 
-    if mode not in ['prospective', 'retrospective']:
+    if mode not in ['prospective', 'retrospective', 'retrospective-autoenc']:
         print('Mode: {} not implemented. Quitting...'.format(mode))
         quit()
     if not int(num_years):
