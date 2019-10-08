@@ -31,7 +31,7 @@ from components import (TransformedGenerator, check_ipynb, data,
 # Save path and parameter loading
 
 # Empty string to start training a new model, else will load parameters from this directory; will start a new model if can't load.
-LOAD_FROM = 'prospective/20190829-1302'
+LOAD_FROM = ''
 
 # Check if can load hyperparameters from specified dir, else create new dir
 try:
@@ -50,9 +50,9 @@ except:
 
         # Execution parameters
         # retrospective for medication profile analysis, prospective for order prediction
-        'MODE': 'prospective',
+        'MODE': 'retrospective-autoenc',
         # Keep chronological sequence when splitting for validation
-        'KEEP_TIME_ORDER':False, # True for local dataset, False for mimic
+        'KEEP_TIME_ORDER':True, # True for local dataset, False for mimic
         'VAL_SPLIT_SEED':random_seed, # Seed to get identical splits when resuming training if KEEP_TIME_ORDER is False
         # True to do cross-val, false to do single training run with validation
         'CROSS_VALIDATE': False,
@@ -64,7 +64,7 @@ except:
         # False prepares all data, True samples a number of encounters for faster execution, useful for debugging or testing
         'RESTRICT_DATA': False,
         'RESTRICT_SAMPLE_SIZE':1000, # The number of encounters to sample in the restricted data.
-        'DATA_DIR': 'mimic',  # Where to find the preprocessed data.
+        'DATA_DIR': '1yr_retrospective-autoenc',  # Where to find the preprocessed data.
 
         # Word2vec parameters
         'W2V_ALPHA': 0.013, # for local dataset 0.013, for mimic 0.013
@@ -99,8 +99,8 @@ except:
         # Neural network training parameters,
         'BATCH_SIZE': 256,
         'MAX_TRAINING_EPOCHS':1000, # Default 1000, should never get there, reduce for faster execution when testing or debugging.
-        'SINGLE_RUN_EPOCHS':16, # How many epochs to train when doing a single run without validation
-        'LEARNING_RATE_SCHEDULE':{14:1e-4}, # Dict where keys are epoch index (epoch - 1) where the learning rate decreases and values are the new learning rate.
+        'SINGLE_RUN_EPOCHS':7, # How many epochs to train when doing a single run without validation. 16 for local retrospective. 7 for mimic prospective.
+        'LEARNING_RATE_SCHEDULE':{}, # Dict where keys are epoch index (epoch - 1) where the learning rate decreases and values are the new learning rate. {14:1e-4} for local data retrospective. {} for mimic prospective.
         'N_TRAINING_STEPS_PER_EPOCH': None, # 1000 for retrospective, None for prospective (use whole generator)
         'N_VALIDATION_STEPS_PER_EPOCH': None, # 1000 for retrospective, None for prospective (use whole generator)
     }
@@ -211,6 +211,9 @@ for i in range(initial_fold, loop_iters):
 
     profiles_train, targets_train, pre_seq_train, post_seq_train, active_meds_train, active_classes_train, depa_train, targets_test, pre_seq_test, post_seq_test, active_meds_test, active_classes_test, depa_test, definitions = d.make_lists(get_valid=get_valid,
         cross_val_fold=cross_val_fold)
+    if param.MODE == 'retrospective-autoenc':
+        targets_train = active_meds_train
+        targets_test = active_meds_test
 
     # Try loading previously fitted transformation pipelines. If they do not exist or do not
     # correspond to the current fold, build and fit new pipelines for word2vec embeddings,
@@ -257,7 +260,7 @@ for i in range(initial_fold, loop_iters):
     except:
         print('Could not load label encoder for current fold...')
         le, output_n_classes = tp.fitsave_labelencoder(
-            save_path, targets_train, i)
+            save_path, targets_train, i, param.MODE)
 
     # Neural network
 
@@ -288,9 +291,12 @@ for i in range(initial_fold, loop_iters):
 
     # Try loading a partially trained neural network for current fold,
     # or define a new neural network
+    if param.MODE == 'retrospective-autoenc':
+        custom_objects_dict = {'autoencoder_accuracy':n.autoencoder_accuracy}
+    else:
+        custom_objects_dict = {'sparse_top10_accuracy': n.sparse_top10_accuracy, 'sparse_top30_accuracy': n.sparse_top30_accuracy}
     try:
-        model = tf.keras.models.load_model(os.path.join(save_path, 'partially_trained_model_{}.h5'.format(i)), custom_objects={
-            'sparse_top10_accuracy': n.sparse_top10_accuracy, 'sparse_top30_accuracy': n.sparse_top30_accuracy})
+        model = tf.keras.models.load_model(os.path.join(save_path, 'partially_trained_model_{}.h5'.format(i)), custom_objects=custom_objects_dict)
     except:
         model = n.define_model(param.LSTM_SIZE, param.N_LSTM, param.DENSE_PSE_SIZE, param.CONCAT_LSTM_SIZE, param.CONCAT_TOTAL_SIZE, param.DENSE_SIZE,
                                param.DROPOUT, param.L2_REG, param.SEQUENCE_LENGTH, param.W2V_EMBEDDING_DIM, pse_shape, param.N_PSE_DENSE, param.N_DENSE, output_n_classes)
@@ -354,10 +360,18 @@ v = visualization()
 # If cross-validating, plot evaluation metrics (best epoch)
 # by fold. Else, plot training history by epoch.
 if param.CROSS_VALIDATE:
-    cv_results_df = pd.read_csv(os.path.join(save_path, 'cv_results.csv'))
-    v.plot_crossval_accuracy_history(cv_results_df, save_path)
-    v.plot_crossval_loss_history(cv_results_df, save_path)
+    plotting_df = pd.read_csv(os.path.join(save_path, 'cv_results.csv'))
+    if param.MODE == 'retrospective-autoenc':
+        v.plot_crossval_autoenc_accuracy_history(plotting_df, save_path)
+        v.plot_crossval_loss_history(plotting_df, save_path)
+    else:
+        v.plot_crossval_accuracy_history(plotting_df, save_path)
+        v.plot_crossval_loss_history(plotting_df, save_path)
 elif param.VALIDATE:
-    history_df = pd.read_csv(os.path.join(save_path, 'training_history.csv'))
-    v.plot_accuracy_history(history_df, save_path)
-    v.plot_loss_history(history_df, save_path)
+    plotting_df = pd.read_csv(os.path.join(save_path, 'training_history.csv'))
+    if param.MODE == 'retrospective-autoenc':
+        v.plot_autoenc_accuracy_history(plotting_df, save_path)
+        v.plot_loss_history(plotting_df, save_path)
+    else:
+        v.plot_accuracy_history(plotting_df, save_path)
+        v.plot_loss_history(plotting_df, save_path)

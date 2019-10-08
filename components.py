@@ -17,7 +17,7 @@ from sklearn.model_selection import (ShuffleSplit, TimeSeriesSplit,
                                      train_test_split)
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import FunctionTransformer, LabelEncoder
-from tensorflow import keras, test
+from tensorflow import keras, test, math, constant, dtypes, float32
 
 
 class check_ipynb:
@@ -83,9 +83,12 @@ class data:
         else:
             self.profiles = None
         # Load all the files
-        print('Loading targets...')
-        with open(self.targets_file, mode='rb') as file:
-            self.targets = pickle.load(file)
+        if self.mode == 'retrospective-autoenc':
+            self.targets = None
+        else:
+            print('Loading targets...')
+            with open(self.targets_file, mode='rb') as file:
+                self.targets = pickle.load(file)
         print('Loading pre sequences...')
         with open(self.pre_seq_file, mode='rb') as file:
             self.pre_seqs = pickle.load(file)
@@ -180,8 +183,11 @@ class data:
                                    for enc in self.enc_train]
         else:
             self.profiles_train = []
-        self.targets_train = [
-            target for enc in self.enc_train for target in self.targets[enc]]
+        if self.targets != None:
+            self.targets_train = [
+                target for enc in self.enc_train for target in self.targets[enc]]
+        else:
+            self.targets_train = []
         self.pre_seq_train = [
             seq for enc in self.enc_train for seq in self.pre_seqs[enc]]
         self.post_seq_train = [
@@ -196,28 +202,39 @@ class data:
         self.depa_train = [[str(dep) for dep in depa]
                            for enc in self.enc_train for depa in self.depas[enc]]
 
-        # Make a list of unique targets in train set to exclude unseen targets from validation set
-        unique_targets_train = list(set(self.targets_train))
-
         # Validation set is built only if necessary
         if get_valid:
-            print('Building validation set...')
-            # Filter out samples with previously unseen labels.
-            self.targets_val = [
-                target for enc in self.enc_val for target in self.targets[enc] if target in unique_targets_train]
-            self.pre_seq_val = [seq for enc in self.enc_val for seq, target in zip(
-                self.pre_seqs[enc], self.targets[enc]) if target in unique_targets_train]
-            self.post_seq_val = [seq for enc in self.enc_val for seq, target in zip(
-                self.post_seqs[enc], self.targets[enc]) if target in unique_targets_train]
-            self.active_meds_val = [active_med for enc in self.enc_val for active_med, target in zip(
-                self.active_meds[enc], self.targets[enc]) if target in unique_targets_train]
-            if self.use_classes:
-                self.active_classes_val = [active_class for enc in self.enc_val for active_class, target in zip(
-                    self.active_classes[enc], self.targets[enc]) if target in unique_targets_train]
+            if len(self.targets_train) > 0 :
+                # Make a list of unique targets in train set to exclude unseen targets from validation set
+                unique_targets_train = list(set(self.targets_train))
+                print('Building validation set...')
+                # Filter out samples with previously unseen labels.
+                self.targets_val = [
+                    target for enc in self.enc_val for target in self.targets[enc] if target in unique_targets_train]
+                self.pre_seq_val = [seq for enc in self.enc_val for seq, target in zip(
+                    self.pre_seqs[enc], self.targets[enc]) if target in unique_targets_train]
+                self.post_seq_val = [seq for enc in self.enc_val for seq, target in zip(
+                    self.post_seqs[enc], self.targets[enc]) if target in unique_targets_train]
+                self.active_meds_val = [active_med for enc in self.enc_val for active_med, target in zip(
+                    self.active_meds[enc], self.targets[enc]) if target in unique_targets_train]
+                if self.use_classes:
+                    self.active_classes_val = [active_class for enc in self.enc_val for active_class, target in zip(
+                        self.active_classes[enc], self.targets[enc]) if target in unique_targets_train]
+                else:
+                    self.active_classes_val = []
+                self.depa_val = [[str(dep) for dep in depa] for enc in self.enc_val for depa, target in zip(
+                    self.depas[enc], self.targets[enc]) if target in unique_targets_train]
             else:
-                self.active_classes_val = []
-            self.depa_val = [[str(dep) for dep in depa] for enc in self.enc_val for depa, target in zip(
-                self.depas[enc], self.targets[enc]) if target in unique_targets_train]
+                print('Building validation set...')
+                self.targets_val = []
+                self.pre_seq_val = [seq for enc in self.enc_val for seq in self.pre_seqs[enc]]
+                self.post_seq_val = [seq for enc in self.enc_val for seq in self.post_seqs[enc]]
+                self.active_meds_val = [active_med for enc in self.enc_val for active_med in self.active_meds[enc]]
+                if self.use_classes:
+                    self.active_classes_val = [active_class for enc in self.enc_val for active_class in self.active_classes[enc]]
+                else:
+                    self.active_classes_val = []
+                self.depa_val = [[str(dep) for dep in depa] for enc in self.enc_val for depa in self.depas[enc]]
         else:
             self.targets_val = None
             self.pre_seq_val = None
@@ -225,6 +242,7 @@ class data:
             self.active_meds_val = None
             self.active_classes_val = None
             self.depa_val = None
+        
 
         if shuffle_train_set:
             # Initial shuffle of training set
@@ -240,6 +258,10 @@ class data:
                                         self.active_meds_train, self.active_classes_train, self.depa_train))
                     random.shuffle(shuffled)
                     self.targets_train, self.pre_seq_train, self.post_seq_train, self.active_meds_train, self.active_classes_train, self.depa_train = zip(*shuffled)
+                elif self.mode == 'retrospective-autoenc':
+                    shuffled = list(zip(self.pre_seq_train, self.active_meds_train, self.active_classes_train, self.depa_train))
+                    random.shuffle(shuffled)
+                    self.pre_seq_train, self.active_meds_train, self.active_classes_train, self.depa_train = zip(*shuffled)
             else:
                 if self.mode == 'prospective':
                     shuffled = list(zip(self.targets_train, self.pre_seq_train,
@@ -251,6 +273,10 @@ class data:
                                         self.active_meds_train, self.depa_train))
                     random.shuffle(shuffled)
                     self.targets_train, self.pre_seq_train, self.post_seq_train, self.active_meds_train, self.depa_train = zip(*shuffled)
+                elif self.mode == 'retrospective-autoenc':
+                    shuffled = list(zip(self.pre_seq_train, self.active_meds_train, self.depa_train))
+                    random.shuffle(shuffled)
+                    self.pre_seq_train, self.active_meds_train, self.depa_train = zip(*shuffled)
 
        # Print out the number of samples obtained to make sure they match.
         print('Training set: Obtained {} profiles, {} targets, {} pre sequences, {} post sequences, {} active meds, {} active classes, {} depas and {} encs.'.format(len(self.profiles_train), len(
@@ -386,10 +412,17 @@ class transformation_pipelines:
         return x
 
     # Encode the labels, save the pipeline
-    def fitsave_labelencoder(self, save_path, targets, n_fold):
-        le = LabelEncoder()
+    def fitsave_labelencoder(self, save_path, targets, n_fold, mode):
+
+        if mode == 'retrospective-autoenc':
+            le = CountVectorizer(lowercase=False, preprocessor=self.pse_pp, analyzer=self.pse_a, binary=True)
+        else:
+            le = LabelEncoder()
         le.fit(targets)
-        output_n_classes = len(le.classes_)
+        if mode == 'retrospective-autoenc':
+            output_n_classes = len(le.vocabulary_)
+        else:
+            output_n_classes = len(le.classes_)
         joblib.dump((output_n_classes, n_fold, le),
                     os.path.join(save_path, 'le.joblib'))
         return le, output_n_classes
@@ -452,7 +485,7 @@ class TransformedGenerator(keras.utils.Sequence):
         transformed_w2v_pre = keras.preprocessing.sequence.pad_sequences(
             transformed_w2v_pre, maxlen=self.sequence_length, dtype='float32')
         # Name the w2v feature dict key according to prediction mode
-        if self.mode == 'prospective':
+        if self.mode == 'prospective' or self.mode == 'retrospective-autoenc':
             w2v_pre_namestring = 'w2v_input'
         elif self.mode == 'retrospective':
             w2v_pre_namestring = 'w2v_pre_input'
@@ -491,7 +524,10 @@ class TransformedGenerator(keras.utils.Sequence):
             # Get a batch
             batch_y = self.y[idx * self.batch_size:(idx+1) * self.batch_size]
             # Transform the batch
-            transformed_y = self.le.transform(batch_y)
+            if self.mode == 'retrospective-autoenc':
+                transformed_y = self.le.transform(batch_y).todense()
+            else:
+                transformed_y = self.le.transform(batch_y)
             y = {'main_output': transformed_y}
             return X, y
         else:
@@ -514,6 +550,11 @@ class TransformedGenerator(keras.utils.Sequence):
                     random.shuffle(shuffled)
                     self.y, self.X_w2v_pre, self.X_w2v_post, self.X_am, self.X_ac, self.X_depa = zip(
                         *shuffled)
+                elif self.mode == 'retrospective-autoenc':
+                    shuffled = list(zip(self.y, self.X_w2v_pre, self.X_am, self.X_ac, self.X_depa))
+                    random.shuffle(shuffled)
+                    self.y, self.X_w2v_pre, self.X_am, self.X_ac, self.X_depa = zip(
+                        *shuffled)
             else:
                 if self.mode == 'prospective':
                     shuffled = list(zip(self.y, self.X_w2v_pre,
@@ -526,6 +567,12 @@ class TransformedGenerator(keras.utils.Sequence):
                                         self.X_w2v_post, self.X_am, self.X_depa))
                     random.shuffle(shuffled)
                     self.y, self.X_w2v_pre, self.X_w2v_post, self.X_am, self.X_depa = zip(
+                        *shuffled)
+                elif self.mode == 'retrospective-autoenc':
+                    shuffled = list(zip(self.y, self.X_w2v_pre,
+                                        self.X_am, self.X_depa))
+                    random.shuffle(shuffled)
+                    self.y, self.X_w2v_pre, self.X_am, self.X_depa = zip(
                         *shuffled)
 
 
@@ -547,6 +594,12 @@ class neural_network:
     def sparse_top30_accuracy(self, y_true, y_pred):
         sparse_top_k_categorical_accuracy = keras.metrics.sparse_top_k_categorical_accuracy
         return (sparse_top_k_categorical_accuracy(y_true, y_pred, k=30))
+
+    def autoencoder_accuracy(self, y_true, y_pred):
+        dichot_ypred = dtypes.cast(math.greater_equal(y_pred, constant(0.5)), float32)
+        maximums = math.count_nonzero(math.maximum(y_true, dichot_ypred), 1, dtype=float32)
+        correct = math.count_nonzero(math.multiply(y_true, dichot_ypred), 1, dtype=float32)
+        return math.reduce_mean(math.xdivy(correct, maximums))
 
     # Callbacks during training
     def callbacks(self, save_path, n_fold, callback_mode='train_with_valid', learning_rate_schedule=None):
@@ -612,7 +665,7 @@ class neural_network:
         Model = keras.models.Model
 
         # Assign word2vec pre sequence input name according to mode
-        if self.mode == 'prospective':
+        if self.mode == 'prospective' or self.mode =='retrospective-autoenc':
             w2v_pre_input_name = 'w2v_input'
         elif self.mode == 'retrospective':
             w2v_pre_input_name = 'w2v_pre_input'
@@ -635,7 +688,7 @@ class neural_network:
         w2v_pre = Dropout(dropout)(w2v_pre)
         if self.mode == 'retrospective':
             to_concat_sequence.append(w2v_pre)
-        elif self.mode == 'prospective':
+        elif self.mode == 'prospective' or self.mode == 'retrospective-autoenc':
             to_concat.append(w2v_pre)
         inputs.append(w2v_pre_input)
 
@@ -682,19 +735,30 @@ class neural_network:
 
         # Concatenation and dense layers
         concatenated = concatenate(to_concat)
-        for _ in range(n_dense):
+        for n in range(n_dense):
             concatenated = BatchNormalization()(concatenated)
-            concatenated = Dense(concat_total_size, activation='relu',
-                                 kernel_regularizer=l2(l2_reg))(concatenated)
+            if n == n_dense - 1 and self.mode == 'retrospective-autoenc':
+                concatenated = Dense(concat_total_size*2, activation='relu',
+                                    kernel_regularizer=l2(l2_reg))(concatenated)
+            else:
+                concatenated = Dense(concat_total_size, activation='relu',
+                                    kernel_regularizer=l2(l2_reg))(concatenated)
             concatenated = Dropout(dropout)(concatenated)
         concatenated = BatchNormalization()(concatenated)
-        output = Dense(output_n_classes, activation='softmax',
-                       name='main_output')(concatenated)
+        if self.mode == 'retrospective-autoenc':
+            output = Dense(output_n_classes, activation='sigmoid',
+                        name='main_output')(concatenated)
+        else:
+            output = Dense(output_n_classes, activation='softmax',
+                        name='main_output')(concatenated)
 
         # Compile the model
         model = Model(inputs=inputs, outputs=output)
-        model.compile(optimizer='Adam', loss=['sparse_categorical_crossentropy'], metrics=[
-                      'sparse_categorical_accuracy', self.sparse_top10_accuracy, self.sparse_top30_accuracy])
+        if self.mode == 'retrospective-autoenc':
+            model.compile(optimizer='Adam', loss=['binary_crossentropy'], metrics=[self.autoencoder_accuracy])
+        else:
+            model.compile(optimizer='Adam', loss=['sparse_categorical_crossentropy'], metrics=[
+                        'sparse_categorical_accuracy', self.sparse_top10_accuracy, self.sparse_top30_accuracy])
 
         return model
 
@@ -758,6 +822,32 @@ class visualization:
         # Clear
         plt.gcf().clear()
 
+    def plot_autoenc_accuracy_history(self, df, save_path):
+        # Select only useful columns
+        acc_df = df[['autoencoder_accuracy', 'val_autoencoder_accuracy']].copy()
+        # Rename columns to clearer names
+        acc_df.rename(inplace=True, index=str, columns={
+            'autoencoder_accuracy': 'Autoencoder accuracy',
+            'val_autoencoder_accuracy': 'Val autoencoder accuracy',
+        })
+        # Structure the dataframe as expected by Seaborn
+        acc_df = acc_df.stack().reset_index()
+        acc_df.rename(inplace=True, index=str, columns={
+                      'level_0': 'Epoch', 'level_1': 'Metric', 0: 'Result'})
+        # Make sure the epochs are int to avoid weird ordering effects in the plot
+        acc_df['Epoch'] = acc_df['Epoch'].astype('int8')
+        # Plot
+        sns.set(style='darkgrid')
+        sns.relplot(x='Epoch', y='Result', hue='Metric',
+                    kind='line', data=acc_df)
+        # Output the plot
+        if self.in_ipynb:
+            plt.show()
+        else:
+            plt.savefig(os.path.join(save_path, 'acc_history.png'))
+        # Clear
+        plt.gcf().clear()
+
     def plot_loss_history(self, df, save_path):
         loss_df = df[['loss', 'val_loss']].copy()
         loss_df.rename(inplace=True, index=str, columns={
@@ -776,7 +866,7 @@ class visualization:
             plt.gcf().clear()
 
     def plot_crossval_accuracy_history(self, df, save_path):
-            # Select only useful columns
+        # Select only useful columns
         cv_results_df_filtered = df[['sparse_top30_accuracy', 'val_sparse_top30_accuracy', 'sparse_top10_accuracy',
                                      'val_sparse_top10_accuracy', 'sparse_categorical_accuracy', 'val_sparse_categorical_accuracy']].copy()
         # Rename columns to clearer names
@@ -831,5 +921,33 @@ class visualization:
         else:
             plt.savefig(os.path.join(
                 save_path, 'cross_val_loss_history.png'))
+        # Clear
+        plt.gcf().clear()
+
+    def plot_crossval_autoenc_accuracy_history(self, df, save_path):
+        # Select only useful columns
+        cv_results_df_filtered = df[['autoencoder_accuracy', 'val_autoencoder_accuracy']].copy()
+        # Rename columns to clearer names
+        cv_results_df_filtered.rename(inplace=True, index=str, columns={
+            'autoencoder_accuracy': 'Autoencoder accuracy',
+            'val_autoencoder_accuracy': 'Val autoencoder accuracy',
+        })
+        # Structure the dataframe as expected by Seaborn
+        cv_results_graph_df = cv_results_df_filtered.stack().reset_index()
+        cv_results_graph_df.rename(inplace=True, index=str, columns={
+            'level_0': 'Split', 'level_1': 'Metric', 0: 'Result'})
+        # Make sure the splits are int to avoid weird ordering effects in the plot
+        cv_results_graph_df['Split'] = cv_results_graph_df['Split'].astype(
+            'int8')
+        # Plot
+        sns.set(style='darkgrid')
+        sns.relplot(x='Split', y='Result', hue='Metric',
+                    kind='line', data=cv_results_graph_df)
+        # Output the plot
+        if self.in_ipynb:
+            plt.show()
+        else:
+            plt.savefig(os.path.join(
+                save_path, 'cross_val_acc_history.png'))
         # Clear
         plt.gcf().clear()
