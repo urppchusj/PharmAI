@@ -82,7 +82,7 @@ Arguments:
 --mode	'retrospective' or 'prospective' depending on how the preprocessed data will be used. Retrospective autoencoder mode is not yet implemented for the mimic preprocessor.
 ```
 
-## w2v_embeddings.py
+### w2v_embeddings.py
 
 Find the best word2vec training hyperparameters to maximize the accuracy on a list of analogies. We provide a list of pairs for the mimic dataset where the semantic relationship is going from a drug in tablet form to a drug in oral solution form (`mimic/data/pairs.txt`), as described in our paper. The file `utils/w2v_analogies.py` transforms these pairs into an analogy file (`mimic/data/eval_analogy.txt`) matching specifications for the [gensim accuracy evaluation method](https://radimrehurek.com/gensim/models/keyedvectors.html#gensim.models.keyedvectors.Word2VecKeyedVectors.accuracy) that is used for scoring.
 
@@ -92,31 +92,31 @@ We provide a Jupyter Notebook showing our summary exploration of the hyperparame
 
 Once the word2vec hyperparameters are found, they should be adjusted in the `train.py` file.
 
-## train.py
+### train.py
 
 This file is used to begin training and resume training a partially trained model. The file contains a parameter dictionary used to adjust the training mode and parameters as well as training hyperparameters. First, this script should be used to explore the hyperparameter space and configuration of the neural network by enabling the `CROSS_VALIDATE` flag. Experiments with a validation set but without cross-validation can be performed by setting the `CROSS-VALIDATE` flag to `False` and the `VALIDATE` flag to `True`. A final model can be trained on the entire dataset by setting both flags to `False`.
 
 This parameter dictionary contains a `RESTRICT_DATA` flag that can be enabled to use only a sample of orders instead of the whole dataset. The sample size can be adjusted. This can be useful to try different things and to debug faster.
 
-## evaluate.py
+### evaluate.py
 
 This script uses the test subset of the data to determine the final performance metrics of the model. Will compute global metrics and metrics by patient category, using a dictionary mapping of departments to patient categories specified in a department file which must be manually encoded.
 
 In autoencoder mode, will show samples of reconstructed patient profiles.
 
-## components.py
+### components.py
 
 This file is not meant to be run, but is a collection of classes and functions used in the previous scripts. The neural network architecture can be adjusted within this file.
 
-## utils/dummy_class.py
+### utils/dummy_class.py
 
 This script acts as a dummy classifier, calculating accuracy metrics if the top1, top10 and top30 most popular drugs in the dataset were always predicted. It also returns the number of classes within that set and a frequency histogram of the 50 most popular classes.
 
-## utils/extract_druginfo_mimic.py
+### utils/extract_druginfo_mimic.py
 
 This script extracts the drug information from the MIMIC `PRESCRIPTIONS` table to a `definitions.csv` file providing the formulary drug code in relation to a computed string including the drug name, product strength and pharmaceutical form. This can be useful to match formulary drug codes to human-readable strings. Be careful, some formulary codes match to multiple strings.
 
-## utils/w2v_analogies.py
+### utils/w2v_analogies.py
 
 This script takes a list of pairs of drugs and computes analogies, see `w2v_embeddings` above.
 
@@ -135,9 +135,10 @@ Requires:
 - Matplotlib
 - Pydot
 - Graphviz
+- TQDM
 - Seaborn
 - Gensim
-- Tensorflow 1.13 or later
+- Tensorflow 2.0 or later
 - Jupyter
 
 # Contributors
