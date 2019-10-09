@@ -73,9 +73,9 @@ except:
         # Word2vec parameters
         'W2V_ALPHA': 0.013, # for local dataset 0.013, for mimic 0.013
         'W2V_ITER': 32, # for local dataset 32, for mimic 32
-        'W2V_EMBEDDING_DIM': 64, # for local dataset 128, for mimic 64
+        'W2V_EMBEDDING_DIM': 128, # for local dataset 128, for mimic 64
         'W2V_HS': 0, # for local dataset 0, for mimic 0
-        'W2V_SG': 1, # for local dataset 0, for mimic 1
+        'W2V_SG': 0, # for local dataset 0, for mimic 1
         'W2V_MIN_COUNT': 5,
         # Exports only in a single training run, no effect in cross-validation
         'EXPORT_W2V_EMBEDDINGS': False,
@@ -90,10 +90,10 @@ except:
         # Number of additional batchnorm/dense/dropout layers after PSE before concat (minimum 1 not included in this count)
         'N_PSE_DENSE': 0,
         # Number of batchnorm/dense/dropout layers after concatenation (minimum 1 not included in this count)
-        'N_DENSE': 2,
+        'N_DENSE': 1,
         'LSTM_SIZE': 128, # 512 for retrospective, 128 for prospective
         'DENSE_PSE_SIZE': 128, # 256 for retrospective, 128 for prospective
-        'CONCAT_LSTM_SIZE': 512, # 512 for retrospective, irrelevant for prospective
+        'CONCAT_LSTM_SIZE': 512, # 512 for retrospective, irrelevant for prospective or retrospective-autoenc
         'CONCAT_TOTAL_SIZE': 256, # 512 for retrospective, 256 for prospective
         'DENSE_SIZE': 256, # 128 for retrospective, 256 for prospective
         'DROPOUT': 0.2, # 0.3 for retrospective, 0.2 for prospective
@@ -103,7 +103,7 @@ except:
         # Neural network training parameters,
         'BATCH_SIZE': 256,
         'MAX_TRAINING_EPOCHS':1000, # Default 1000, should never get there, reduce for faster execution when testing or debugging.
-        'SINGLE_RUN_EPOCHS':7, # How many epochs to train when doing a single run without validation. 16 for local retrospective. 7 for mimic prospective.
+        'SINGLE_RUN_EPOCHS':3, # How many epochs to train when doing a single run without validation. 16 for local retrospective. 7 for mimic prospective.
         'LEARNING_RATE_SCHEDULE':{}, # Dict where keys are epoch index (epoch - 1) where the learning rate decreases and values are the new learning rate. {14:1e-4} for local data retrospective. {} for mimic prospective.
         'N_TRAINING_STEPS_PER_EPOCH': None, # 1000 for retrospective, None for prospective (use whole generator)
         'N_VALIDATION_STEPS_PER_EPOCH': None, # 1000 for retrospective, None for prospective (use whole generator)

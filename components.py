@@ -17,7 +17,7 @@ from sklearn.model_selection import (ShuffleSplit, TimeSeriesSplit,
                                      train_test_split)
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import FunctionTransformer, LabelEncoder, MultiLabelBinarizer
-from tensorflow import keras, test, math, constant, dtypes, float32
+from tensorflow import keras, test, math, constant, dtypes, float32, metrics
 
 
 class check_ipynb:
@@ -648,10 +648,11 @@ class neural_network:
         # Use CuDNN implementation of LSTM if GPU is available, LSTM if it isn't
         # (non-CuDNN implementation is slower even on GPU)
         # TODO upgrade to tensorflow 2: this is supposedly done automatically
-        if test.is_gpu_available():
-            LSTM = keras.layers.CuDNNLSTM
-        else:
-            LSTM = keras.layers.LSTM
+        #if test.is_gpu_available():
+        #    LSTM = keras.layers.CuDNNLSTM
+        #else:
+        #    LSTM = keras.layers.LSTM
+        LSTM = keras.layers.LSTM
 
         Dense = keras.layers.Dense
         Dropout = keras.layers.Dropout
@@ -752,7 +753,7 @@ class neural_network:
         # Compile the model
         model = Model(inputs=inputs, outputs=output)
         if self.mode == 'retrospective-autoenc':
-            model.compile(optimizer='Adam', loss=['binary_crossentropy'], metrics=[self.autoencoder_accuracy])
+            model.compile(optimizer='Adam', loss=['binary_crossentropy'], metrics=[self.autoencoder_accuracy, metrics.AUC(num_thresholds=10, curve='PR', name='aupr')])
         else:
             model.compile(optimizer='Adam', loss=['sparse_categorical_crossentropy'], metrics=[
                         'sparse_categorical_accuracy', self.sparse_top10_accuracy, self.sparse_top30_accuracy])
@@ -826,6 +827,8 @@ class visualization:
         acc_df.rename(inplace=True, index=str, columns={
             'autoencoder_accuracy': 'Autoencoder accuracy',
             'val_autoencoder_accuracy': 'Val autoencoder accuracy',
+            'aupr': 'Area under precision-recall',
+            'val_aupr': 'Val area under precision-recall',
         })
         # Structure the dataframe as expected by Seaborn
         acc_df = acc_df.stack().reset_index()
@@ -928,6 +931,8 @@ class visualization:
         cv_results_df_filtered.rename(inplace=True, index=str, columns={
             'autoencoder_accuracy': 'Autoencoder accuracy',
             'val_autoencoder_accuracy': 'Val autoencoder accuracy',
+            'aupr': 'Area under precision-recall',
+            'val_aupr': 'Val area under precision-recall',
         })
         # Structure the dataframe as expected by Seaborn
         cv_results_graph_df = cv_results_df_filtered.stack().reset_index()
