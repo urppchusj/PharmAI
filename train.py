@@ -85,25 +85,27 @@ except:
         'TSVD_N_COMPONENTS': 200,  # Number of components on the lsi-transformed profile state
 
         # Neural network parameters
-        # Number of additional LSTM layers (minimum 2 not included in this count)
+        # Number of additional LSTM layers (minimum 1 not included in this count)
         'N_LSTM': 0,
+        # Number of dense layers after lstm (minimum 0):
+        'POST_LSTM_DENSE': 0,
         # Number of additional batchnorm/dense/dropout layers after PSE before concat (minimum 1 not included in this count)
-        'N_PSE_DENSE': 0,
+        'N_PSE_DENSE': 1,
         # Number of batchnorm/dense/dropout layers after concatenation (minimum 1 not included in this count)
         'N_DENSE': 1,
-        'LSTM_SIZE': 128, # 512 for retrospective, 128 for prospective
-        'DENSE_PSE_SIZE': 128, # 256 for retrospective, 128 for prospective
-        'CONCAT_LSTM_SIZE': 512, # 512 for retrospective, irrelevant for prospective or retrospective-autoenc
-        'CONCAT_TOTAL_SIZE': 256, # 512 for retrospective, 256 for prospective
-        'DENSE_SIZE': 256, # 128 for retrospective, 256 for prospective
-        'DROPOUT': 0.2, # 0.3 for retrospective, 0.2 for prospective
+        'LSTM_SIZE': 256, # 512 for retrospective, 128 for prospective
+        'DENSE_PSE_SIZE': 256, # 256 for retrospective, 128 for prospective
+        'CONCAT_LSTM_SIZE': 8, # 512 for retrospective, irrelevant for prospective or retrospective-autoenc
+        'CONCAT_TOTAL_SIZE': 128, # 512 for retrospective, 256 for prospective
+        'DENSE_SIZE': 256, #  128 for retrospective, 256 for prospective
+        'DROPOUT': 0.1, # 0.3 for retrospective, 0.2 for prospective
         'L2_REG': 0,
         'SEQUENCE_LENGTH': 30,
 
         # Neural network training parameters,
         'BATCH_SIZE': 256,
         'MAX_TRAINING_EPOCHS':1000, # Default 1000, should never get there, reduce for faster execution when testing or debugging.
-        'SINGLE_RUN_EPOCHS':3, # How many epochs to train when doing a single run without validation. 16 for local retrospective. 7 for mimic prospective.
+        'SINGLE_RUN_EPOCHS':16, # How many epochs to train when doing a single run without validation. 16 for local retrospective. 7 for mimic prospective.
         'LEARNING_RATE_SCHEDULE':{}, # Dict where keys are epoch index (epoch - 1) where the learning rate decreases and values are the new learning rate. {14:1e-4} for local data retrospective. {} for mimic prospective.
         'N_TRAINING_STEPS_PER_EPOCH': None, # 1000 for retrospective, None for prospective (use whole generator)
         'N_VALIDATION_STEPS_PER_EPOCH': None, # 1000 for retrospective, None for prospective (use whole generator)
@@ -302,7 +304,7 @@ for i in range(initial_fold, loop_iters):
     try:
         model = tf.keras.models.load_model(os.path.join(save_path, 'partially_trained_model_{}.h5'.format(i)), custom_objects=custom_objects_dict)
     except:
-        model = n.define_model(param.LSTM_SIZE, param.N_LSTM, param.DENSE_PSE_SIZE, param.CONCAT_LSTM_SIZE, param.CONCAT_TOTAL_SIZE, param.DENSE_SIZE,
+        model = n.define_model(param.LSTM_SIZE, param.N_LSTM, param.POST_LSTM_DENSE, param.DENSE_PSE_SIZE, param.CONCAT_LSTM_SIZE, param.CONCAT_TOTAL_SIZE, param.DENSE_SIZE,
                                param.DROPOUT, param.L2_REG, param.SEQUENCE_LENGTH, param.W2V_EMBEDDING_DIM, pse_shape, param.N_PSE_DENSE, param.N_DENSE, output_n_classes)
         if (param.CROSS_VALIDATE == True and i == 0) or (param.CROSS_VALIDATE == False):
             tf.keras.utils.plot_model(

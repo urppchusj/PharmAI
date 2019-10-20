@@ -598,6 +598,13 @@ class neural_network:
         correct = math.count_nonzero(math.multiply(y_true, dichot_ypred), 1, dtype=float32)
         return math.reduce_mean(math.xdivy(correct, maximums))
 
+    def autoencoder_false_neg_rate(self, y_true, y_pred):
+        dichot_ypred = dtypes.cast(math.greater_equal(y_pred, constant(0.5)), float32)
+        true = math.count_nonzero(y_true, 1, dtype=float32)
+        correct = math.count_nonzero(math.multiply(y_true, dichot_ypred), 1, dtype=float32)
+        false_negs = math.subtract(true, correct)
+        return math.reduce_mean(math.xdivy(false_negs, true))
+
     # Callbacks during training
     def callbacks(self, save_path, n_fold, callback_mode='train_with_valid', learning_rate_schedule=None):
 
@@ -642,7 +649,7 @@ class neural_network:
             new_lr = cur_lr
         return new_lr
 
-    def define_model(self, sequence_size, n_add_seq_layers, dense_pse_size, concat_sequence_size, concat_total_size, dense_size, dropout, l2_reg, sequence_length, w2v_embedding_dim, pse_shape, n_add_pse_dense, n_dense, output_n_classes):
+    def define_model(self, sequence_size, n_add_seq_layers, n_post_lstm_dense, dense_pse_size, concat_sequence_size, concat_total_size, dense_size, dropout, l2_reg, sequence_length, w2v_embedding_dim, pse_shape, n_add_pse_dense, n_dense, output_n_classes):
 
         # Assign simple names
         # Use CuDNN implementation of LSTM if GPU is available, LSTM if it isn't
@@ -675,15 +682,20 @@ class neural_network:
         # The pre-target sequence word2vec inputs and layers before concatenation
         w2v_pre_input = Input(shape=(
             sequence_length, w2v_embedding_dim, ), dtype='float32', name=w2v_pre_input_name)
-        w2v_pre = LSTM(sequence_size, return_sequences=True)(w2v_pre_input)
-        w2v_pre = Dropout(dropout)(w2v_pre)
-        for _ in range(n_add_seq_layers):
-            w2v_pre = LSTM(sequence_size, return_sequences=True)(w2v_pre)
+        for n in range(n_add_seq_layers):
+            if n == 0:
+                w2v_pre = LSTM(sequence_size, return_sequences=True)(w2v_pre_input)
+            else:
+                w2v_pre = LSTM(sequence_size, return_sequences=True)(w2v_pre)
             w2v_pre = Dropout(dropout)(w2v_pre)
-        w2v_pre = LSTM(sequence_size)(w2v_pre)
+        if n_add_seq_layers == 0:
+            w2v_pre = LSTM(sequence_size)(w2v_pre_input)
+        else:
+            w2v_pre = LSTM(sequence_size)(w2v_pre)
         w2v_pre = Dropout(dropout)(w2v_pre)
-        w2v_pre = Dense(sequence_size, activation='relu')(w2v_pre)
-        w2v_pre = Dropout(dropout)(w2v_pre)
+        for _ in range(n_post_lstm_dense):
+            w2v_pre = Dense(sequence_size, activation='relu')(w2v_pre)
+            w2v_pre = Dropout(dropout)(w2v_pre)
         if self.mode == 'retrospective':
             to_concat_sequence.append(w2v_pre)
         elif self.mode == 'prospective' or self.mode == 'retrospective-autoenc':
@@ -696,17 +708,23 @@ class neural_network:
         if self.mode == 'retrospective':
             w2v_post_input = Input(shape=(
                 sequence_length, w2v_embedding_dim, ), dtype='float32', name='w2v_post_input')
-            w2v_post = LSTM(sequence_size, return_sequences=True,
+            for n in range(n_add_seq_layers):
+                if n == 0:
+                    w2v_post = LSTM(sequence_size, return_sequences=True,
                             go_backwards=True)(w2v_post_input)
-            w2v_post = Dropout(dropout)(w2v_post)
-            for _ in range(n_add_seq_layers):
-                w2v_post = LSTM(sequence_size, return_sequences=True)(w2v_post)
+                else:
+                    w2v_post = LSTM(sequence_size, return_sequences=True,
+                            go_backwards=True)(w2v_post)
                 w2v_post = Dropout(dropout)(w2v_post)
-            w2v_post = LSTM(sequence_size)(w2v_post)
+            if n_add_seq_layers == 0:
+                w2v_post = LSTM(sequence_size)(w2v_post_input)
+            else:
+                w2v_post = LSTM(sequence_size)(w2v_post)
             w2v_post = Dropout(dropout)(w2v_post)
-            w2v_post = Dense(sequence_size, activation='relu',
-                             kernel_regularizer=l2(l2_reg))(w2v_post)
-            w2v_post = Dropout(dropout)(w2v_post)
+            for _ in range(n_post_lstm_dense):
+                w2v_post = Dense(sequence_size, activation='relu',
+                                kernel_regularizer=l2(l2_reg))(w2v_post)
+                w2v_post = Dropout(dropout)(w2v_post)
             to_concat_sequence.append(w2v_post)
             inputs.append(w2v_post_input)
 
@@ -735,11 +753,13 @@ class neural_network:
         concatenated = concatenate(to_concat)
         for n in range(n_dense):
             concatenated = BatchNormalization()(concatenated)
-            if n == n_dense - 1 and self.mode == 'retrospective-autoenc':
-                concatenated = Dense(concat_total_size*2, activation='relu',
+            if n == 0 :
+                concatenated = Dense(concat_total_size, activation='relu', kernel_regularizer=l2(l2_reg))(concatenated)
+            elif n == n_dense - 1 and self.mode == 'retrospective-autoenc':
+                concatenated = Dense(dense_size*2, activation='relu',
                                     kernel_regularizer=l2(l2_reg))(concatenated)
             else:
-                concatenated = Dense(concat_total_size, activation='relu',
+                concatenated = Dense(dense_size, activation='relu',
                                     kernel_regularizer=l2(l2_reg))(concatenated)
             concatenated = Dropout(dropout)(concatenated)
         concatenated = BatchNormalization()(concatenated)
@@ -753,10 +773,11 @@ class neural_network:
         # Compile the model
         model = Model(inputs=inputs, outputs=output)
         if self.mode == 'retrospective-autoenc':
-            model.compile(optimizer='Adam', loss=['binary_crossentropy'], metrics=[self.autoencoder_accuracy, metrics.AUC(num_thresholds=10, curve='PR', name='aupr')])
+            model.compile(optimizer='Adam', loss=['binary_crossentropy'], metrics=[self.autoencoder_accuracy, metrics.AUC(num_thresholds=10, curve='PR', name='aupr'), self.autoencoder_false_neg_rate])
         else:
             model.compile(optimizer='Adam', loss=['sparse_categorical_crossentropy'], metrics=[
                         'sparse_categorical_accuracy', self.sparse_top10_accuracy, self.sparse_top30_accuracy])
+        print(model.summary())
 
         return model
 
@@ -822,13 +843,15 @@ class visualization:
 
     def plot_autoenc_accuracy_history(self, df, save_path):
         # Select only useful columns
-        acc_df = df[['autoencoder_accuracy', 'val_autoencoder_accuracy']].copy()
+        acc_df = df[['autoencoder_accuracy', 'val_autoencoder_accuracy', 'aupr', 'val_aupr', 'autoencoder_false_neg_rate', 'val_autoencoder_false_neg_rate']].copy()
         # Rename columns to clearer names
         acc_df.rename(inplace=True, index=str, columns={
             'autoencoder_accuracy': 'Autoencoder accuracy',
             'val_autoencoder_accuracy': 'Val autoencoder accuracy',
             'aupr': 'Area under precision-recall',
             'val_aupr': 'Val area under precision-recall',
+            'autoencoder_false_neg_rate': 'Atypical rate',
+            'val_autoencoder_false_neg_rate': 'Val atypical rate'
         })
         # Structure the dataframe as expected by Seaborn
         acc_df = acc_df.stack().reset_index()
@@ -926,13 +949,15 @@ class visualization:
 
     def plot_crossval_autoenc_accuracy_history(self, df, save_path):
         # Select only useful columns
-        cv_results_df_filtered = df[['autoencoder_accuracy', 'val_autoencoder_accuracy']].copy()
+        cv_results_df_filtered = df[['autoencoder_accuracy', 'val_autoencoder_accuracy', 'aupr', 'val_aupr', 'autoencoder_false_neg_rate', 'val_autoencoder_false_neg_rate']].copy()
         # Rename columns to clearer names
         cv_results_df_filtered.rename(inplace=True, index=str, columns={
             'autoencoder_accuracy': 'Autoencoder accuracy',
             'val_autoencoder_accuracy': 'Val autoencoder accuracy',
             'aupr': 'Area under precision-recall',
             'val_aupr': 'Val area under precision-recall',
+            'autoencoder_false_neg_rate': 'Atypical rate',
+            'val_autoencoder_false_neg_rate': 'Val atypical rate'
         })
         # Structure the dataframe as expected by Seaborn
         cv_results_graph_df = cv_results_df_filtered.stack().reset_index()
