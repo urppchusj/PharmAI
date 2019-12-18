@@ -2,7 +2,7 @@
 
 Analyze medication profiles using machine learning.
 
-This project was started to provide clean and adaptable code building on [medorder_prediction](https://github.com/grouchysmurf/medorder_prediction).
+This project was started to provide clean and adaptable code building on [medorder_prediction](https://github.com/pharmai/medorder_prediction).
 
 ---
 
