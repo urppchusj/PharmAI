@@ -17,7 +17,8 @@ from sklearn.model_selection import (ShuffleSplit, TimeSeriesSplit,
                                      train_test_split)
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import FunctionTransformer, LabelEncoder, MultiLabelBinarizer
-from tensorflow import keras, test, math, constant, dtypes, float32, metrics
+from tensorflow import keras, test, math, constant, dtypes, float32, metrics, shape
+from tensorflow import random as tfrandom
 
 
 class check_ipynb:
@@ -48,7 +49,11 @@ class data:
 
     def __init__(self, datadir, mode, keep_time_order=True):
         # Prepare the data paths given a directory.
-        self.mode = mode
+        # retrospective-gan mode uses the same preprocessed data as retrospective-autoenc mode
+        if mode == 'retrospective-gan':
+            self.mode = 'retrospective-autoenc'
+        else:
+            self.mode = mode
         self.keep_time_order = keep_time_order
         # File names correspond to what is created by the preprocessor.
         # Definitions file allows matching drug ids to drug names
@@ -355,9 +360,14 @@ class transformation_pipelines:
     # column transformer
     def prepare_pse_data(self, active_meds, active_classes, departments):
         print('Preparing data for PSE...')
-        if len(active_classes) == 0:
+        # Case of retrospective-gan
+        if len(active_classes) == 0 and len(departments) == 0:
+            pse_data = [[am] for am in active_meds]
+        # Case of MIMIC dataset
+        elif len(active_classes) == 0:
             pse_data = [[am, de] for am, de in zip(
                 active_meds, departments)]
+        # Other cases
         else:
             pse_data = [[am, ac, de] for am, ac, de in zip(
                 active_meds, active_classes, departments)]
@@ -414,7 +424,7 @@ class transformation_pipelines:
     # Encode the labels, save the pipeline
     def fitsave_labelencoder(self, save_path, targets, n_fold, mode):
 
-        if mode == 'retrospective-autoenc':
+        if mode == 'retrospective-autoenc' or mode == 'retrospective-gan':
             le = MultiLabelBinarizer()
         else:
             le = LabelEncoder()
@@ -448,11 +458,19 @@ class TransformedGenerator(keras.utils.Sequence):
         self.X_w2v_post = X_w2v_post
         self.X_am = X_am
         self.X_ac = X_ac
-        if len(self.X_ac) == 0:
-            self.use_classes = False
-        else:
-            self.use_classes = True
         self.X_depa = X_depa
+        if self.mode == 'retrospective-gan':
+            self.use_w2v = False
+            self.use_classes = False
+            self.use_depa = False
+        elif len(self.X_ac) == 0:
+            self.use_w2v=True
+            self.use_classes = False
+            self.use_depa = True
+        else:
+            self.use_w2v = True
+            self.use_classes = True
+            self.use_depa = True
         # Transformation parameters
         self.w2v_embedding_dim = w2v_embedding_dim
         self.sequence_length = sequence_length
@@ -475,41 +493,45 @@ class TransformedGenerator(keras.utils.Sequence):
         X = dict()
         # Transform the sequence into word2vec embeddings
         # Get a batch
-        batch_w2v_pre = self.X_w2v_pre[idx *
-                                       self.batch_size:(idx+1) * self.batch_size]
-        transformed_w2v_pre = [[self.w2v.gensim_model.wv.get_vector(medic) if medic in self.w2v.gensim_model.wv.index2entity else np.zeros(
-            self.w2v_embedding_dim) for medic in seq] if len(seq) > 0 else [] for seq in batch_w2v_pre]
-        transformed_w2v_pre = keras.preprocessing.sequence.pad_sequences(
-            transformed_w2v_pre, maxlen=self.sequence_length, dtype='float32')
-        # Name the w2v feature dict key according to prediction mode
-        if self.mode == 'prospective' or self.mode == 'retrospective-autoenc':
-            w2v_pre_namestring = 'w2v_input'
-        elif self.mode == 'retrospective':
-            w2v_pre_namestring = 'w2v_pre_input'
-        X[w2v_pre_namestring] = transformed_w2v_pre
-        # Compute post sequences only in retrospective mode
-        if self.mode == 'retrospective':
-            batch_w2v_post = self.X_w2v_post[idx *
-                                             self.batch_size:(idx+1) * self.batch_size]
-            transformed_w2v_post = [[self.w2v.gensim_model.wv.get_vector(medic) if medic in self.w2v.gensim_model.wv.index2entity else np.zeros(
-                self.w2v_embedding_dim) for medic in seq] if len(seq) > 0 else [] for seq in batch_w2v_post]
-            transformed_w2v_post = keras.preprocessing.sequence.pad_sequences(
-                transformed_w2v_post, maxlen=self.sequence_length, dtype='float32', padding='post', truncating='post')
-            X['w2v_post_input'] = transformed_w2v_post
+        if self.use_w2v:
+            batch_w2v_pre = self.X_w2v_pre[idx *
+                                        self.batch_size:(idx+1) * self.batch_size]
+            transformed_w2v_pre = [[self.w2v.gensim_model.wv.get_vector(medic) if medic in self.w2v.gensim_model.wv.index2entity else np.zeros(
+                self.w2v_embedding_dim) for medic in seq] if len(seq) > 0 else [] for seq in batch_w2v_pre]
+            transformed_w2v_pre = keras.preprocessing.sequence.pad_sequences(
+                transformed_w2v_pre, maxlen=self.sequence_length, dtype='float32')
+            # Name the w2v feature dict key according to prediction mode
+            if self.mode == 'prospective' or self.mode == 'retrospective-autoenc':
+                w2v_pre_namestring = 'w2v_input'
+            elif self.mode == 'retrospective':
+                w2v_pre_namestring = 'w2v_pre_input'
+            X[w2v_pre_namestring] = transformed_w2v_pre
+            # Compute post sequences only in retrospective mode
+            if self.mode == 'retrospective':
+                batch_w2v_post = self.X_w2v_post[idx *
+                                                self.batch_size:(idx+1) * self.batch_size]
+                transformed_w2v_post = [[self.w2v.gensim_model.wv.get_vector(medic) if medic in self.w2v.gensim_model.wv.index2entity else np.zeros(
+                    self.w2v_embedding_dim) for medic in seq] if len(seq) > 0 else [] for seq in batch_w2v_post]
+                transformed_w2v_post = keras.preprocessing.sequence.pad_sequences(
+                    transformed_w2v_post, maxlen=self.sequence_length, dtype='float32', padding='post', truncating='post')
+                X['w2v_post_input'] = transformed_w2v_post
         # Transform the active meds, pharmacological classes and department into a multi-hot vector
         # Get batches
         batch_am = self.X_am[idx * self.batch_size:(idx+1) * self.batch_size]
         if self.use_classes:
             batch_ac = self.X_ac[idx * self.batch_size:(idx+1) * self.batch_size]
-        batch_depa = self.X_depa[idx *
-                                 self.batch_size:(idx+1) * self.batch_size]
+        if self.use_depa:
+            batch_depa = self.X_depa[idx *
+                                    self.batch_size:(idx+1) * self.batch_size]
         # Prepare the batches for input into the ColumnTransformer step of the pipeline
-        if self.use_classes:
+        if self.use_classes and self.use_depa:
             batch_pse = [[bp, bc, bd]
                          for bp, bc, bd in zip(batch_am, batch_ac, batch_depa)]
-        else:
+        elif self.use_depa:
             batch_pse = [[bp, bd]
                      for bp, bd in zip(batch_am, batch_depa)]
+        else:
+            batch_pse = [[bp] for bp in batch_am]
         # Transform
         transformed_pse = self.pse.transform(batch_pse)
         X['pse_input'] = transformed_pse
@@ -521,10 +543,7 @@ class TransformedGenerator(keras.utils.Sequence):
             # Get a batch
             batch_y = self.y[idx * self.batch_size:(idx+1) * self.batch_size]
             # Transform the batch
-            if self.mode == 'retrospective-autoenc':
-                transformed_y = self.le.transform(batch_y)
-            else:
-                transformed_y = self.le.transform(batch_y)
+            transformed_y = self.le.transform(batch_y)
             y = {'main_output': transformed_y}
             return X, y
         else:
@@ -547,7 +566,7 @@ class TransformedGenerator(keras.utils.Sequence):
                     random.shuffle(shuffled)
                     self.y, self.X_w2v_pre, self.X_w2v_post, self.X_am, self.X_ac, self.X_depa = zip(
                         *shuffled)
-                elif self.mode == 'retrospective-autoenc':
+                elif self.mode == 'retrospective-autoenc' or 'retrospective-gan':
                     shuffled = list(zip(self.y, self.X_w2v_pre, self.X_am, self.X_ac, self.X_depa))
                     random.shuffle(shuffled)
                     self.y, self.X_w2v_pre, self.X_am, self.X_ac, self.X_depa = zip(
@@ -565,7 +584,7 @@ class TransformedGenerator(keras.utils.Sequence):
                     random.shuffle(shuffled)
                     self.y, self.X_w2v_pre, self.X_w2v_post, self.X_am, self.X_depa = zip(
                         *shuffled)
-                elif self.mode == 'retrospective-autoenc':
+                elif self.mode == 'retrospective-autoenc' or 'retrospective-gan':
                     shuffled = list(zip(self.y, self.X_w2v_pre,
                                         self.X_am, self.X_depa))
                     random.shuffle(shuffled)
@@ -781,6 +800,113 @@ class neural_network:
 
         return model
 
+    def gan_encoder(self, n_enc_dec_blocks, autoenc_max_size, autoenc_size_ratio, autoenc_squeeze_size, pse_shape, dropout):
+
+        Dense = keras.layers.Dense
+        Dropout = keras.layers.Dropout
+        Input = keras.layers.Input
+        BatchNormalization = keras.layers.BatchNormalization
+        LeakyReLU = keras.layers.LeakyReLU
+        Model = keras.models.Model
+
+        # Input
+        pse_input = Input(shape=(pse_shape,),
+                          dtype='float32', name='pse_input')
+        
+        # Encoder
+        # First layer is dropout like a denoising autoencoder
+        encoded = Dropout(dropout)(pse_input)
+        encoded = Dense(autoenc_max_size)(encoded)
+        encoded = BatchNormalization()(encoded)
+        encoded = LeakyReLU()(encoded)
+        for n in range(n_enc_dec_blocks-1):
+            encoded = Dense(autoenc_max_size//(autoenc_size_ratio**(n+1)))(encoded)
+            encoded = BatchNormalization()(encoded)
+            encoded = LeakyReLU()(encoded)
+        
+        # Latent rep
+        mu = Dense(autoenc_squeeze_size)(encoded)
+        log_var = Dense(autoenc_squeeze_size)(encoded)
+        latent_repr = Sampling()([mu, log_var])
+
+        return Model(pse_input, latent_repr)
+    
+    def gan_decoder(self, n_enc_dec_blocks, autoenc_max_size, autoenc_size_ratio, autoenc_squeeze_size, pse_shape, dropout):
+
+        Dense = keras.layers.Dense
+        Input = keras.layers.Input
+        BatchNormalization = keras.layers.BatchNormalization
+        LeakyReLU = keras.layers.LeakyReLU
+        Model = keras.models.Model
+
+        z = Input(shape=(autoenc_squeeze_size,))
+        # Decoder
+        decoded = Dense(autoenc_max_size//(autoenc_size_ratio**(n_enc_dec_blocks-1)))(z)
+        decoded = LeakyReLU()(decoded)
+        for n in range(n_enc_dec_blocks-1):
+            decoded = Dense(autoenc_max_size//(autoenc_size_ratio**(n_enc_dec_blocks-(n+2))))(decoded)
+            decoded = LeakyReLU()(decoded)
+        reconstructed = Dense(pse_shape, activation='sigmoid', name='main_output')(decoded)
+
+        return Model(z, reconstructed)
+   
+    def gan_discriminator(self, n_enc_dec_blocks, autoenc_max_size, autoenc_size_ratio, autoenc_squeeze_size, pse_shape, dropout):
+
+        Dense = keras.layers.Dense
+        Input = keras.layers.Input
+        BatchNormalization = keras.layers.BatchNormalization
+        LeakyReLU = keras.layers.LeakyReLU
+        Model = keras.models.Model
+        
+        # Input
+        candidate = Input(shape=(autoenc_squeeze_size,),
+                          dtype='float32', name='candidate_input')
+
+        # Encoder
+        #encoded = Dense(autoenc_max_size//autoenc_size_ratio, activation='relu')(encoded)
+        #encoded = BatchNormalization()(candidate)
+        encoded = Dense(autoenc_max_size//autoenc_size_ratio)(candidate)
+        encoded = LeakyReLU()(encoded)
+        for n in range(n_enc_dec_blocks-1):
+            encoded = Dense(autoenc_max_size//(autoenc_size_ratio**(n+2)))(encoded)
+            encoded = BatchNormalization()(encoded)
+            encoded = LeakyReLU()(encoded)
+        encoded = Dense(autoenc_squeeze_size)(encoded)
+        encoded = BatchNormalization()(encoded)
+        encoded = LeakyReLU()(encoded)
+        
+        # Output layer rep
+
+        validity = Dense(1, activation='sigmoid', name='discriminator_output')(encoded)
+
+        return Model(candidate, validity)
+
+    def aaa(self, n_enc_dec_blocks, autoenc_max_size, autoenc_size_ratio, autoenc_squeeze_size, pse_shape, dropout):
+
+        gan_discriminator = self.gan_discriminator(n_enc_dec_blocks, autoenc_max_size, autoenc_size_ratio, autoenc_squeeze_size, pse_shape, dropout)
+        gan_discriminator.compile(optimizer='Adam', loss=['binary_crossentropy'], metrics=['accuracy'])
+        gan_discriminator.summary()
+
+        encoder = self.gan_encoder(n_enc_dec_blocks, autoenc_max_size, autoenc_size_ratio, autoenc_squeeze_size, pse_shape, dropout)
+        encoder.summary()
+        decoder = self.gan_decoder(n_enc_dec_blocks, autoenc_max_size, autoenc_size_ratio, autoenc_squeeze_size, pse_shape, dropout)
+        decoder.summary()
+
+        profile = keras.layers.Input(shape=pse_shape)
+        encoded_repr = encoder(profile)
+        reconstructed_profile = decoder(encoded_repr)
+
+        gan_discriminator.trainable = False
+
+        validity = gan_discriminator(encoded_repr)
+
+        adversarial_autoencoder = keras.models.Model(profile, [reconstructed_profile, validity])
+        adversarial_autoencoder.compile(optimizer='Adam', loss=['binary_crossentropy', 'binary_crossentropy'], metrics=[[self.autoencoder_accuracy, metrics.AUC(num_thresholds=10, curve='PR', name='aupr'), self.autoencoder_false_neg_rate], 'accuracy'], loss_weights=[0.998, 0.002])
+
+        adversarial_autoencoder.summary()
+
+        return encoder, decoder, gan_discriminator, adversarial_autoencoder
+
 
 class EpochLoggerCallback(keras.callbacks.Callback):
 
@@ -798,6 +924,11 @@ class EpochLoggerCallback(keras.callbacks.Callback):
         with open(os.path.join(self.save_path, 'done_epochs.pkl'), mode='wb') as file:
             pickle.dump(self.done_epochs, file)
 
+class Sampling(keras.layers.Layer):
+
+    def call(self, inputs):
+        mean, log_var = inputs
+        return tfrandom.normal(shape(log_var)) * math.exp(log_var /2) + mean
 
 class visualization:
 

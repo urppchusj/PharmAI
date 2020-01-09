@@ -13,14 +13,17 @@ import os
 import pathlib
 import pickle
 import random
+import statistics
 import warnings
 from datetime import datetime
 from multiprocessing import cpu_count
 from types import SimpleNamespace
 
 import joblib
+import numpy as np
 import pandas as pd
 import tensorflow as tf
+from tqdm import tqdm
 
 from components import (TransformedGenerator, check_ipynb, data,
                         neural_network, transformation_pipelines,
@@ -53,15 +56,17 @@ except:
     parameters_dict = {
 
         # Execution parameters
-        # retrospective for medication profile analysis, prospective for order prediction
-        'MODE': 'retrospective-autoenc',
+        # retrospective for medication profile analysis, prospective for order prediction,
+        # retrospective-autoenc for medication profile analysis with autoencoder,
+        # retrospective-gan for medication profile analysis with autoencoder GAN
+        'MODE': 'retrospective-gan',
         # Keep chronological sequence when splitting for validation
         'KEEP_TIME_ORDER':True, # True for local dataset, False for mimic
         'VAL_SPLIT_SEED':random_seed, # Seed to get identical splits when resuming training if KEEP_TIME_ORDER is False
         # True to do cross-val, false to do single training run with validation
         'CROSS_VALIDATE': False,
         'N_CROSS_VALIDATION_FOLDS': 5,
-        # Validate when doing a single training run. Cross-validation has priority over this
+        # validate when doing a single training run. Cross-validation has priority over this
         'VALIDATE': True,
 
         # Data parameters
@@ -92,7 +97,7 @@ except:
         # Number of additional batchnorm/dense/dropout layers after PSE before concat (minimum 1 not included in this count)
         'N_PSE_DENSE': 1,
         # Number of batchnorm/dense/dropout layers after concatenation (minimum 1 not included in this count)
-        'N_DENSE': 1,
+        'N_DENSE': 2,
         'LSTM_SIZE': 256, # 512 for retrospective, 128 for prospective
         'DENSE_PSE_SIZE': 256, # 256 for retrospective, 128 for prospective
         'CONCAT_LSTM_SIZE': 8, # 512 for retrospective, irrelevant for prospective or retrospective-autoenc
@@ -102,11 +107,22 @@ except:
         'L2_REG': 0,
         'SEQUENCE_LENGTH': 30,
 
+        # Neural network paramters for retrospective-gan mode
+        # Number of batchnorm/dense/dropout blocks after input into autoencoder
+        'N_ENC_DEC_BLOCKS':2,
+        # Size of largest encoder (first) and decoder (last) dense layer
+        'AUTOENC_MAX_SIZE':128,
+        # Denominator for division of initial size for subsequent layers
+        'AUTOENC_SIZE_RATIO':2,
+        # Autoencoder latent representation layer size
+        'AUTOENC_SQUEEZE_SIZE':32,
+        # Discriminator will be like the encoder part of the autoencoder but with a single node instead of the latent representation layer size
+
         # Neural network training parameters,
         'BATCH_SIZE': 256,
         'MAX_TRAINING_EPOCHS':1000, # Default 1000, should never get there, reduce for faster execution when testing or debugging.
-        'SINGLE_RUN_EPOCHS':16, # How many epochs to train when doing a single run without validation. 16 for local retrospective. 7 for mimic prospective.
-        'LEARNING_RATE_SCHEDULE':{}, # Dict where keys are epoch index (epoch - 1) where the learning rate decreases and values are the new learning rate. {14:1e-4} for local data retrospective. {} for mimic prospective.
+        'SINGLE_RUN_EPOCHS':12, # How many epochs to train when doing a single run without validation. 16 for local retrospective. 7 for mimic prospective.
+        'LEARNING_RATE_SCHEDULE':{8:1e-4, 11:1e-5}, # Dict where keys are epoch index (epoch - 1) where the learning rate decreases and values are the new learning rate. {14:1e-4} for local data retrospective. {} for mimic prospective.
         'N_TRAINING_STEPS_PER_EPOCH': None, # 1000 for retrospective, None for prospective (use whole generator)
         'N_VALIDATION_STEPS_PER_EPOCH': None, # 1000 for retrospective, None for prospective (use whole generator)
     }
@@ -171,9 +187,15 @@ if os.path.isfile(os.path.join(save_path, 'sampled_encs.pkl')):
 else:
     enc_file = False
 
+# Retrospective-gan mode does not require profiles (uses only active meds)
+if param.MODE == 'retrospective-gan':
+    get_profiles = False
+else:
+    get_profiles = True
+
 if new_model:
     d.load_data(restrict_data=param.RESTRICT_DATA, save_path=save_path,
-                restrict_sample_size=param.RESTRICT_SAMPLE_SIZE)
+                restrict_sample_size=param.RESTRICT_SAMPLE_SIZE, get_profiles=get_profiles)
 else:
     d.load_data(previous_encs_path=enc_file)
 
@@ -217,7 +239,7 @@ for i in range(initial_fold, loop_iters):
 
     profiles_train, targets_train, pre_seq_train, post_seq_train, active_meds_train, active_classes_train, depa_train, targets_test, pre_seq_test, post_seq_test, active_meds_test, active_classes_test, depa_test, definitions = d.make_lists(get_valid=get_valid,
         cross_val_fold=cross_val_fold)
-    if param.MODE == 'retrospective-autoenc':
+    if param.MODE == 'retrospective-autoenc' or param.MODE == 'retrospective-gan':
         targets_train = active_meds_train
         targets_test = active_meds_test
 
@@ -229,17 +251,18 @@ for i in range(initial_fold, loop_iters):
     # Word2vec embeddings
     # Create a word2vec pipeline and train word2vec embeddings in that pipeline
     # on the training set profiles. Optionnaly export word2vec embeddings.
-    try:
-        n_fold, w2v = joblib.load(os.path.join(save_path, 'w2v.joblib'))
-        assert n_fold == i
-        print('Successfully loaded word2vec pipeline for current fold.')
-    except:
-        print('Could not load word2vec pipeline for current fold...')
-        tp.define_w2v_pipeline(param.W2V_ALPHA, param.W2V_ITER, param.W2V_EMBEDDING_DIM,
-                               param.W2V_HS, param.W2V_SG, param.W2V_MIN_COUNT, cpu_count())
-        w2v = tp.fitsave_w2v_pipeline(save_path, profiles_train, i)
-        if param.CROSS_VALIDATE == False and param.EXPORT_W2V_EMBEDDINGS == True:
-            tp.export_w2v_embeddings(save_path, definitions_dict=definitions)
+    if param.MODE != 'retrospective-gan':
+        try:
+            n_fold, w2v = joblib.load(os.path.join(save_path, 'w2v.joblib'))
+            assert n_fold == i
+            print('Successfully loaded word2vec pipeline for current fold.')
+        except:
+            print('Could not load word2vec pipeline for current fold...')
+            tp.define_w2v_pipeline(param.W2V_ALPHA, param.W2V_ITER, param.W2V_EMBEDDING_DIM,
+                                param.W2V_HS, param.W2V_SG, param.W2V_MIN_COUNT, cpu_count())
+            w2v = tp.fitsave_w2v_pipeline(save_path, profiles_train, i)
+            if param.CROSS_VALIDATE == False and param.EXPORT_W2V_EMBEDDINGS == True:
+                tp.export_w2v_embeddings(save_path, definitions_dict=definitions)
 
     # Profile state encoder (PSE)
     # Encode the profile state, either as a multi-hot vector (binary count vectorizer) or using Latent Semantic Indexing.
@@ -250,14 +273,17 @@ for i in range(initial_fold, loop_iters):
         print('Successfully loaded PSE pipeline for current fold.')
     except:
         print('Could not load PSE pipeline for current fold...')
-        pse_data = tp.prepare_pse_data(
-            active_meds_train, active_classes_train, depa_train)
+        if param.MODE == 'retrospective-gan':
+            pse_data = tp.prepare_pse_data(active_meds_train, [], [])
+        else:
+            pse_data = tp.prepare_pse_data(
+                active_meds_train, active_classes_train, depa_train)
         tp.define_pse_pipeline(use_lsi=param.USE_LSI,
                                tsvd_n_components=param.TSVD_N_COMPONENTS)
         pse, pse_shape = tp.fitsave_pse_pipeline(save_path, pse_data, i)
 
-    # Profile state encoder (PSE)
-    # Encode the profile state, either as a multi-hot vector (binary count vectorizer) or using Latent Semantic Indexing
+    # Label encoder
+    # Encode the label using a MultiLabelBinarizer if retrospective-autoenc or retrospective-gan mode, otherwise LabelEncoder
     try:
         output_n_classes, n_fold, le = joblib.load(
             os.path.join(save_path, 'le.joblib'))
@@ -271,7 +297,10 @@ for i in range(initial_fold, loop_iters):
     # Neural network
 
     # Build the generators, prepare the variables for fitting
-    w2v_step = w2v.named_steps['w2v']
+    if param.MODE != 'retrospective-gan':
+        w2v_step = w2v.named_steps['w2v']
+    else:
+        w2v_step = None
     train_generator = TransformedGenerator(param.MODE, w2v_step, param.USE_LSI, pse, le, targets_train, pre_seq_train, post_seq_train,
                                            active_meds_train, active_classes_train, depa_train, param.W2V_EMBEDDING_DIM, param.SEQUENCE_LENGTH, param.BATCH_SIZE)
 
@@ -285,47 +314,138 @@ for i in range(initial_fold, loop_iters):
         n_validation_steps_per_epoch = None
         training_epochs = param.SINGLE_RUN_EPOCHS
 
-    # Define the callbacks
+    # Define the network and train
     n = neural_network(param.MODE)
-    if param.CROSS_VALIDATE:
-        callback_mode = 'cross_val'
-    elif param.VALIDATE:
-        callback_mode = 'train_with_valid'
+
+    if param.MODE == 'retrospective-gan':
+
+        # TODO load previously saved models and resume
+        gan_encoder, gan_decoder, gan_discriminator, gan_adv_autoencoder = n.aaa(param.N_ENC_DEC_BLOCKS, param.AUTOENC_MAX_SIZE, param.AUTOENC_SIZE_RATIO, param.AUTOENC_SQUEEZE_SIZE, pse_shape, param.DROPOUT)
+
+        # Custom training loop
+        for epoch in range(training_epochs):
+
+            d_losses = []
+            g_losses = []
+
+            print('EPOCH {}'.format(epoch + 1))
+            print('TRAINING...')
+
+            for batch_idx  in tqdm(range(len(train_generator))):
+            
+                # Train discriminator
+
+                batch_data_X, batch_data_y = train_generator.__getitem__(batch_idx)
+
+                ones_label = np.ones((len(batch_data_X['pse_input']),1))
+                zeros_label = np.zeros((len(batch_data_X['pse_input']),1))
+
+                latent_from_data = gan_encoder.predict(batch_data_X['pse_input'])
+                latent_generated = np.random.normal(size=(len(batch_data_X['pse_input']), param.AUTOENC_SQUEEZE_SIZE))
+
+                d_loss_generated = gan_discriminator.train_on_batch(latent_generated, ones_label)
+                d_loss_from_data = gan_discriminator.train_on_batch(latent_from_data, zeros_label) 
+                d_loss = 0.5 * np.add(d_loss_generated, d_loss_from_data)
+
+                # Train generator
+
+                g_loss = gan_adv_autoencoder.train_on_batch({'input_2':batch_data_X['pse_input']}, [batch_data_y['main_output'], ones_label])
+
+                d_losses.append(d_loss)
+                g_losses.append(g_loss)
+
+            # Compute the metrics for the epoch
+            d_losses = np.array(d_losses)
+            d_losses = np.mean(d_losses, axis=0)
+
+            g_losses = np.array(g_losses)
+            g_losses = np.mean(g_losses, axis=0)
+
+            all_names = gan_discriminator.metrics_names + gan_adv_autoencoder.metrics_names
+            all_losses = np.hstack((d_losses, g_losses)).tolist()
+
+            print('EPOCH {} TRAINING RESULTS:'.format(epoch+1))
+            print('\n'.join(['{} : {:.3f}'.format(name,metric) for name,metric in zip(all_names, all_losses)]))
+            print('\n')
+
+            # Test data
+            if param.CROSS_VALIDATE or param.VALIDATE:
+                g_val_losses = []
+
+                print('VALIDATION...')
+                for batch_idx  in tqdm(range(len(test_generator))):
+                    
+                    batch_data_X, batch_data_y = test_generator.__getitem__(batch_idx)
+                    ones_label = np.ones((len(batch_data_X['pse_input']),1))
+
+                    g_loss = gan_adv_autoencoder.test_on_batch({'input_2':batch_data_X['pse_input']}, [batch_data_y['main_output'], ones_label])
+
+                    g_val_losses.append(g_loss)
+
+                g_val_losses = np.array(g_val_losses)
+                g_val_losses = np.mean(g_val_losses, axis=0)
+                val_names = ['val_' + name for name in gan_adv_autoencoder.metrics_names]
+
+                print('EPOCH {} VALIDATION RESULTS:'.format(epoch+1))
+                print('\n'.join(['{} : {:.3f}'.format(name,metric) for name,metric in zip(val_names, g_val_losses)]))
+                print('\n')
+
+                all_names = all_names + val_names
+                all_losses = np.hstack((all_losses, g_val_losses)).tolist()
+            
+            epoch_results_df = pd.DataFrame.from_dict(
+                {epoch: dict(zip(all_names, all_losses))}, orient='index')
+            # save the dataframe to csv file, create new file at first epoch, else append
+            if epoch == 0:
+                epoch_results_df.to_csv(os.path.join(save_path, 'training_history.csv'))
+            else:
+                epoch_results_df.to_csv(os.path.join(
+                    save_path, 'training_history.csv'), mode='a', header=False)
+
+        # TODO save the models after each epoch, save the progress state
+        # TODO plot the training graph
+
     else:
-        callback_mode = 'train_no_valid'
-    callbacks = n.callbacks(save_path, i, callback_mode=callback_mode, learning_rate_schedule=param.LEARNING_RATE_SCHEDULE)
 
-    # Try loading a partially trained neural network for current fold,
-    # or define a new neural network
-    if param.MODE == 'retrospective-autoenc':
-        custom_objects_dict = {'autoencoder_accuracy':n.autoencoder_accuracy}
-    else:
-        custom_objects_dict = {'sparse_top10_accuracy': n.sparse_top10_accuracy, 'sparse_top30_accuracy': n.sparse_top30_accuracy}
-    try:
-        model = tf.keras.models.load_model(os.path.join(save_path, 'partially_trained_model_{}.h5'.format(i)), custom_objects=custom_objects_dict)
-    except:
-        model = n.define_model(param.LSTM_SIZE, param.N_LSTM, param.POST_LSTM_DENSE, param.DENSE_PSE_SIZE, param.CONCAT_LSTM_SIZE, param.CONCAT_TOTAL_SIZE, param.DENSE_SIZE,
-                               param.DROPOUT, param.L2_REG, param.SEQUENCE_LENGTH, param.W2V_EMBEDDING_DIM, pse_shape, param.N_PSE_DENSE, param.N_DENSE, output_n_classes)
-        if (param.CROSS_VALIDATE == True and i == 0) or (param.CROSS_VALIDATE == False):
-            tf.keras.utils.plot_model(
-                model, to_file=os.path.join(save_path, 'model.png'))
+        # Try loading a partially trained neural network for current fold,
+        # or define a new neural network
+        if param.MODE == 'retrospective-autoenc':
+            custom_objects_dict = {'autoencoder_accuracy':n.autoencoder_accuracy, 'autoencoder_false_neg_rate':n.autoencoder_false_neg_rate}
+        else:
+            custom_objects_dict = {'sparse_top10_accuracy': n.sparse_top10_accuracy, 'sparse_top30_accuracy': n.sparse_top30_accuracy}
+        try:
+            model = tf.keras.models.load_model(os.path.join(save_path, 'partially_trained_model_{}.h5'.format(i)), custom_objects=custom_objects_dict)
+        except:
+            model = n.define_model(param.LSTM_SIZE, param.N_LSTM, param.POST_LSTM_DENSE, param.DENSE_PSE_SIZE, param.CONCAT_LSTM_SIZE, param.CONCAT_TOTAL_SIZE, param.DENSE_SIZE, param.DROPOUT, param.L2_REG, param.SEQUENCE_LENGTH, param.W2V_EMBEDDING_DIM, pse_shape, param.N_PSE_DENSE, param.N_DENSE, output_n_classes)
+            if (param.CROSS_VALIDATE == True and i == 0) or (param.CROSS_VALIDATE == False):
+                tf.keras.utils.plot_model(
+                    model, to_file=os.path.join(save_path, 'model.png'))
+        
+        # Define the callbacks
+        if param.CROSS_VALIDATE:
+            callback_mode = 'cross_val'
+        elif param.VALIDATE:
+            callback_mode = 'train_with_valid'
+        else:
+            callback_mode = 'train_no_valid'
+        callbacks = n.callbacks(save_path, i, callback_mode=callback_mode, learning_rate_schedule=param.LEARNING_RATE_SCHEDULE)
 
-    # Train the model
+        # Train the model
 
-    # Check if running in Jupyter or not to print progress bars if in terminal and log only at epoch level if in Jupyter.
-    if in_ipynb:
-        verbose = 2
-    else:
-        verbose = 1
+        # Check if running in Jupyter or not to print progress bars if in terminal and log only at epoch level if in Jupyter.
+        if in_ipynb:
+            verbose = 2
+        else:
+            verbose = 1
 
-    model.fit_generator(train_generator,
-                        epochs=training_epochs,
-                        steps_per_epoch=param.N_TRAINING_STEPS_PER_EPOCH,
-                        callbacks=callbacks,
-                        initial_epoch=initial_epoch,
-                        validation_data=test_generator,
-                        validation_steps=n_validation_steps_per_epoch,
-                        verbose=verbose)
+        model.fit_generator(train_generator,
+                            epochs=training_epochs,
+                            steps_per_epoch=param.N_TRAINING_STEPS_PER_EPOCH,
+                            callbacks=callbacks,
+                            initial_epoch=initial_epoch,
+                            validation_data=test_generator,
+                            validation_steps=n_validation_steps_per_epoch,
+                            verbose=verbose)
 
     # If doing cross-validation, get the metrics for the best
     # epoch.
