@@ -51,6 +51,8 @@ class preprocessor():
         if self.get_active_profiles:
             self.raw_profile_data['classnb'] = self.raw_profile_data['medinb_int'].map(
                 classes_data['classnb'])
+            self.raw_profile_data['genename'] = self.raw_profile_data['medinb_int'].map(
+                classes_data['genename'])
             del classes_data
             self.raw_profile_data['class1_part'] = self.raw_profile_data['classnb'].str.slice(
                 start=0, stop=2).astype(np.int32)
@@ -102,6 +104,7 @@ class preprocessor():
         post_seq_dict = defaultdict(list)
         active_profiles_dict = defaultdict(list)
         active_classes_dict = defaultdict(list)
+        active_gene_dict = defaultdict(list)
         depa_dict = defaultdict(list)
         enc_list = []
         # Iterate over encounters, send each encounter to self.build_enc_profiles
@@ -114,7 +117,7 @@ class preprocessor():
             enc_profiles = self.build_enc_profiles(enc)
             # Convert each profile to list
             for profile in enc_profiles.groupby(level='profile', sort=False):
-                targets_to_append_list, pre_seq_to_append_list, post_seq_to_append_list, active_profile_to_append_list, class_1_to_append_list, class_2_to_append_list, class_3_to_append_list, class_4_to_append_list, depa_to_append_list = self.make_profile_lists(
+                targets_to_append_list, pre_seq_to_append_list, post_seq_to_append_list, active_profile_to_append_list, class_1_to_append_list, class_2_to_append_list, class_3_to_append_list, class_4_to_append_list, gene_to_append_list, depa_to_append_list = self.make_profile_lists(
                     profile)
                 if self.dict_key == 'enc':
                     key = enc[0]
@@ -126,12 +129,14 @@ class preprocessor():
                 if self.get_active_profiles:
                     active_profiles_dict[key].extend(
                         active_profile_to_append_list)
+                    active_gene_dict[key].extend(
+                        gene_to_append_list)
                     depa_dict[key].extend(depa_to_append_list)
                     for class_1_to_append, class_2_to_append, class_3_to_append, class_4_to_append in zip(class_1_to_append_list, class_2_to_append_list, class_3_to_append_list, class_4_to_append_list):
                         active_classes_dict[key].append(list(chain.from_iterable(
                             [class_1_to_append, class_2_to_append, class_3_to_append, class_4_to_append])))
         print('Done!')
-        return profiles_dict, targets_dict, pre_seq_dict, post_seq_dict, active_profiles_dict, active_classes_dict, depa_dict, enc_list
+        return profiles_dict, targets_dict, pre_seq_dict, post_seq_dict, active_profiles_dict, active_classes_dict, active_gene_dict, depa_dict, enc_list
 
     def build_enc_profiles(self, enc):
         enc_profiles_list = []
@@ -172,6 +177,7 @@ class preprocessor():
         pre_seq_list = []
         post_seq_list = []
         active_profile_to_append_list = []
+        active_gene_to_append_list = []
         class_1_to_append_list = []
         class_2_to_append_list = []
         class_3_to_append_list = []
@@ -202,12 +208,14 @@ class preprocessor():
                     )
                     # make sets of contents of active profile to prepare for multi-hot encoding
                     active_profile_to_append = active_profile['medinb'].tolist()
+                    active_gene_to_append = active_profile['genename'].tolist()
                     class_1_to_append = active_profile['class1_whole'].tolist()
                     class_2_to_append = active_profile['class2_whole'].tolist()
                     class_3_to_append = active_profile['class3_whole'].tolist()
                     class_4_to_append = active_profile['class4_whole'].tolist()
                     depa_to_append = active_profile['depa'].unique().tolist()
                     active_profile_to_append_list.append(active_profile_to_append)
+                    active_gene_to_append_list.append(active_gene_to_append)
                     class_1_to_append_list.append(class_1_to_append)
                     class_2_to_append_list.append(class_2_to_append)
                     class_3_to_append_list.append(class_3_to_append)
@@ -231,6 +239,7 @@ class preprocessor():
                 )
                 # make lists of contents of active profile to prepare for multi-hot encoding
                 active_profile_to_append = active_profile['medinb'].tolist()
+                active_gene_to_append = active_profile['genename'].tolist()
                 class_1_to_append = active_profile['class1_whole'].tolist()
                 class_2_to_append = active_profile['class2_whole'].tolist()
                 class_3_to_append = active_profile['class3_whole'].tolist()
@@ -249,22 +258,24 @@ class preprocessor():
                 active_profile = profile[1].loc[profile[1]['active'] == 1].copy()
                 # make lists of contents of active profile to prepare for multi-hot encoding
                 active_profile_to_append = active_profile['medinb'].tolist()
+                active_gene_to_append = active_profile['genename'].tolist()
                 class_1_to_append = active_profile['class1_whole'].tolist()
                 class_2_to_append = active_profile['class2_whole'].tolist()
                 class_3_to_append = active_profile['class3_whole'].tolist()
                 class_4_to_append = active_profile['class4_whole'].tolist()
                 depa_to_append = active_profile['depa'].unique().tolist()
                 active_profile_to_append_list.append(active_profile_to_append)
+                active_gene_to_append_list.append(active_gene_to_append)
                 class_1_to_append_list.append(class_1_to_append)
                 class_2_to_append_list.append(class_2_to_append)
                 class_3_to_append_list.append(class_3_to_append)
                 class_4_to_append_list.append(class_4_to_append)
                 depa_to_append_list.append(depa_to_append)
-        return targets_list, pre_seq_list, post_seq_list, active_profile_to_append_list, class_1_to_append_list, class_2_to_append_list, class_3_to_append_list, class_4_to_append_list, depa_to_append_list
+        return targets_list, pre_seq_list, post_seq_list, active_profile_to_append_list, class_1_to_append_list, class_2_to_append_list, class_3_to_append_list, class_4_to_append_list, active_gene_to_append_list, depa_to_append_list
 
     def preprocess(self):
         # Preprocess the data
-        profiles_dict, targets_dict, pre_seq_dict, post_seq_dict, active_profiles_dict, active_classes_dict, depa_dict, enc_list = self.get_profiles()
+        profiles_dict, targets_dict, pre_seq_dict, post_seq_dict, active_profiles_dict, active_classes_dict, active_gene_dict, depa_dict, enc_list = self.get_profiles()
         # Save preprocessed data to pickle file
         pathlib.Path(self.data_save_path).mkdir(parents=True, exist_ok=True)
         with open(os.path.join(self.data_save_path, 'targets_list.pkl'), mode='wb') as file:
@@ -278,6 +289,8 @@ class preprocessor():
         if self.get_active_profiles:
             with open(os.path.join(self.data_save_path, 'active_meds_list.pkl'), mode='wb') as file:
                 pickle.dump(active_profiles_dict, file)
+            with open(os.path.join(self.data_save_path, 'active_gene_list.pkl'), mode='wb') as file:
+                pickle.dump(active_gene_dict, file)
             with open(os.path.join(self.data_save_path, 'active_classes_list.pkl'), mode='wb') as file:
                 pickle.dump(active_classes_dict, file)
             with open(os.path.join(self.data_save_path, 'depa_list.pkl'), mode='wb') as file:
