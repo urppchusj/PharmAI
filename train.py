@@ -73,7 +73,7 @@ except:
         # False prepares all data, True samples a number of encounters for faster execution, useful for debugging or testing
         'RESTRICT_DATA': False,
         'RESTRICT_SAMPLE_SIZE':1000, # The number of encounters to sample in the restricted data.
-        'DATA_DIR': '7yr',  # Where to find the preprocessed data.
+        'DATA_DIR': '1yr',  # Where to find the preprocessed data.
 
         # Word2vec parameters
         'W2V_ALPHA': 0.013, # for local dataset 0.013, for mimic 0.013
@@ -109,7 +109,7 @@ except:
 
         # Neural network paramters for retrospective-gan mode
         # Number of batchnorm/dense/dropout blocks after input into autoencoder
-        'N_ENC_DEC_BLOCKS':2,
+        'N_ENC_DEC_BLOCKS':1,
         # Size of largest encoder (first) and decoder (last) dense layer
         'AUTOENC_MAX_SIZE':128,
         # Denominator for division of initial size for subsequent layers
@@ -320,7 +320,14 @@ for i in range(initial_fold, loop_iters):
     if param.MODE == 'retrospective-gan':
 
         # TODO load previously saved models and resume
-        gan_encoder, gan_decoder, gan_discriminator, gan_adv_autoencoder = n.aaa(param.N_ENC_DEC_BLOCKS, param.AUTOENC_MAX_SIZE, param.AUTOENC_SIZE_RATIO, param.AUTOENC_SQUEEZE_SIZE, pse_shape, param.DROPOUT)
+        custom_objects_dict = {'autoencoder_accuracy':n.autoencoder_accuracy, 'autoencoder_false_neg_rate':n.autoencoder_false_neg_rate}
+        try:
+            gan_encoder = tf.keras.models.load_model(os.path.join(save_path, 'partially_trained_encoder_{}.h5'.format(i)))
+            gan_decoder = tf.keras.models.load_model(os.path.join(save_path, 'partially_trained_decoder_{}.h5'.format(i)))
+            gan_discriminator = tf.keras.models.load_model(os.path.join(save_path, 'partially_trained_discriminator_{}.h5'.format(i)))
+            gan_adv_autoencoder = tf.keras.models.load_model(os.path.join(save_path, 'partially_trained_adversarial_model_{}.h5'.format(i)), custom_objects=custom_objects_dict)
+        except:
+            gan_encoder, gan_decoder, gan_discriminator, gan_adv_autoencoder = n.aaa(param.N_ENC_DEC_BLOCKS, param.AUTOENC_MAX_SIZE, param.AUTOENC_SIZE_RATIO, param.AUTOENC_SQUEEZE_SIZE, pse_shape, param.DROPOUT)
 
         # Custom training loop
         for epoch in range(training_epochs):
@@ -328,7 +335,7 @@ for i in range(initial_fold, loop_iters):
             d_losses = []
             g_losses = []
 
-            print('EPOCH {}'.format(epoch + 1))
+            print('EPOCH {}\n\n'.format(epoch + 1))
             print('TRAINING...')
 
             for batch_idx  in tqdm(range(len(train_generator))):
@@ -402,7 +409,54 @@ for i in range(initial_fold, loop_iters):
                 epoch_results_df.to_csv(os.path.join(
                     save_path, 'training_history.csv'), mode='a', header=False)
 
-        # TODO save the models after each epoch, save the progress state
+            gan_encoder.save(os.path.join(save_path, 'partially_trained_encoder_{}_{}.h5'.format(i,epoch)))
+            gan_decoder.save(os.path.join(save_path, 'partially_trained_decoder_{}_{}.h5'.format(i,epoch)))
+            gan_discriminator.save(os.path.join(save_path, 'partially_trained_discriminator_{}_{}.h5'.format(i,epoch)))
+            gan_adv_autoencoder.save(os.path.join(save_path, 'partially_trained_adversarial_model_{}_{}.h5'.format(i,epoch)))
+
+            # Sample n fake profiles
+            n = 5
+
+            fake_reconsts = gan_decoder.predict(np.random.normal(size=(n, param.AUTOENC_SQUEEZE_SIZE)))
+            fake_reconst_matrix = (fake_reconsts >= 0.5) * 1
+            fake_reconst_labels = le.inverse_transform(fake_reconst_matrix)
+            fake_profiles = [[definitions[med] for med in profile] for profile in fake_reconst_labels]
+            print('These profiles do not exist:\n')
+            for profile in fake_profiles:
+                profile.sort()
+                print('Profile: \n{}'.format(profile))
+
+            # Test n reconstructions
+
+            sampled_profiles = random.sample(active_meds_test, n)
+            transformed_profiles = pse.transform([[bp] for bp in sampled_profiles]).todense()
+            reconstructed = gan_decoder.predict(gan_encoder.predict(transformed_profiles))
+            reconst_matrix = (reconstructed >= 0.5) * 1
+            reconstructed_labels = le.inverse_transform(reconst_matrix)
+            reconstructed_profiles = [[definitions[med] for med in profile] for profile in reconstructed_labels]
+            orig_profiles = [[definitions[med] for med in profile] for profile in sampled_profiles]
+            atypical_meds = [[definitions[med] for med in orig_profile if med not in reconst_profile] for orig_profile, reconst_profile in zip(sampled_profiles, reconstructed_labels)]
+            print('These profiles do exist:\n')
+            for profile, atypical_med in zip(orig_profiles, atypical_meds):
+                profile.sort()
+                atypical_med.sort()
+                print('Profile: \n{}\nAtypicals: \n{}\n'.format(profile, atypical_med))
+                
+            # Save that the epoch completed
+            with open(os.path.join(save_path, 'done_epochs.pkl'), mode='wb') as file:
+                pickle.dump(epoch, file)
+
+        if param.CROSS_VALIDATE:
+            # Save that the fold completed successfully
+            with open(os.path.join(save_path, 'done_crossval_folds.pkl'), mode='wb') as file:
+                pickle.dump(i, file)
+        # Else save the models
+        else:
+            gan_encoder.save(os.path.join(save_path, 'encoder.h5'))
+            gan_decoder.save(os.path.join(save_path, 'decoder.h5'))
+            gan_discriminator.save(os.path.join(save_path, 'discriminator.h5'))
+            gan_adv_autoencoder.save(os.path.join(save_path, 'adversarial_model.h5'))
+        
         # TODO plot the training graph
 
     else:
@@ -447,36 +501,36 @@ for i in range(initial_fold, loop_iters):
                             validation_steps=n_validation_steps_per_epoch,
                             verbose=verbose)
 
-    # If doing cross-validation, get the metrics for the best
-    # epoch.
-    if param.CROSS_VALIDATE:
-        train_results = model.evaluate_generator(
-            train_generator, verbose=verbose)
-        val_results = model.evaluate_generator(test_generator, verbose=verbose)
+        # If doing cross-validation, get the metrics for the best
+        # epoch.
+        if param.CROSS_VALIDATE:
+            train_results = model.evaluate_generator(
+                train_generator, verbose=verbose)
+            val_results = model.evaluate_generator(test_generator, verbose=verbose)
 
-        # Make a list of validation metrics names
-        val_metrics = [
-            'val_' + metric_name for metric_name in model.metrics_names]
+            # Make a list of validation metrics names
+            val_metrics = [
+                'val_' + metric_name for metric_name in model.metrics_names]
 
-        # Concatenate all results in a list
-        all_results = [*train_results, *val_results]
-        all_metric_names = [*model.metrics_names, *val_metrics]
+            # Concatenate all results in a list
+            all_results = [*train_results, *val_results]
+            all_metric_names = [*model.metrics_names, *val_metrics]
 
-        # make a dataframe with the fold metrics
-        fold_results_df = pd.DataFrame.from_dict(
-            {i: dict(zip(all_metric_names, all_results))}, orient='index')
-        # save the dataframe to csv file, create new file at first fold, else append
-        if i == 0:
-            fold_results_df.to_csv(os.path.join(save_path, 'cv_results.csv'))
+            # make a dataframe with the fold metrics
+            fold_results_df = pd.DataFrame.from_dict(
+                {i: dict(zip(all_metric_names, all_results))}, orient='index')
+            # save the dataframe to csv file, create new file at first fold, else append
+            if i == 0:
+                fold_results_df.to_csv(os.path.join(save_path, 'cv_results.csv'))
+            else:
+                fold_results_df.to_csv(os.path.join(
+                    save_path, 'cv_results.csv'), mode='a', header=False)
+            # Save that the fold completed successfully
+            with open(os.path.join(save_path, 'done_crossval_folds.pkl'), mode='wb') as file:
+                pickle.dump(i, file)
+        # Else save the model
         else:
-            fold_results_df.to_csv(os.path.join(
-                save_path, 'cv_results.csv'), mode='a', header=False)
-        # Save that the fold completed successfully
-        with open(os.path.join(save_path, 'done_crossval_folds.pkl'), mode='wb') as file:
-            pickle.dump(i, file)
-    # Else save the model
-    else:
-        model.save(os.path.join(save_path, 'model.h5'))
+            model.save(os.path.join(save_path, 'model.h5'))
 
 # %%
 # Plot the loss and accuracy during training
