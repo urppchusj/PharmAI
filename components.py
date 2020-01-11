@@ -384,7 +384,7 @@ class transformation_pipelines:
         pse_transformers = []
         for i in range(self.n_pse_columns):
             pse_transformers.append(('pse{}'.format(i), CountVectorizer(
-                lowercase=False, preprocessor=self.pse_pp, analyzer=self.pse_a), i))
+                lowercase=False, preprocessor=self.pse_pp, analyzer=self.pse_a, binary=True), i))
         pse_pipeline_transformers = [
             ('columntrans', ColumnTransformer(transformers=pse_transformers))
         ]
@@ -803,7 +803,7 @@ class neural_network:
     def gan_encoder(self, n_enc_dec_blocks, autoenc_max_size, autoenc_size_ratio, autoenc_squeeze_size, pse_shape, dropout):
 
         Dense = keras.layers.Dense
-        Dropout = keras.layers.Dropout
+        #Dropout = keras.layers.Dropout
         Input = keras.layers.Input
         BatchNormalization = keras.layers.BatchNormalization
         LeakyReLU = keras.layers.LeakyReLU
@@ -815,8 +815,8 @@ class neural_network:
         
         # Encoder
         # First layer is dropout like a denoising autoencoder
-        encoded = Dropout(dropout)(pse_input)
-        encoded = Dense(autoenc_max_size)(encoded)
+        #encoded = Dropout(dropout)(pse_input)
+        encoded = Dense(autoenc_max_size)(pse_input)
         encoded = BatchNormalization()(encoded)
         encoded = LeakyReLU()(encoded)
         for n in range(n_enc_dec_blocks-1):
@@ -842,9 +842,11 @@ class neural_network:
         z = Input(shape=(autoenc_squeeze_size,))
         # Decoder
         decoded = Dense(autoenc_max_size//(autoenc_size_ratio**(n_enc_dec_blocks-1)))(z)
+        decoded = BatchNormalization()(decoded)
         decoded = LeakyReLU()(decoded)
         for n in range(n_enc_dec_blocks-1):
             decoded = Dense(autoenc_max_size//(autoenc_size_ratio**(n_enc_dec_blocks-(n+2))))(decoded)
+            decoded = BatchNormalization()(decoded)
             decoded = LeakyReLU()(decoded)
         reconstructed = Dense(pse_shape, activation='sigmoid', name='main_output')(decoded)
 
@@ -863,17 +865,12 @@ class neural_network:
                           dtype='float32', name='candidate_input')
 
         # Encoder
-        #encoded = Dense(autoenc_max_size//autoenc_size_ratio, activation='relu')(encoded)
-        #encoded = BatchNormalization()(candidate)
-        encoded = Dense(autoenc_max_size//autoenc_size_ratio)(candidate)
+        encoded = Dense((autoenc_squeeze_size*2)//autoenc_size_ratio)(candidate)
         encoded = LeakyReLU()(encoded)
         for n in range(n_enc_dec_blocks-1):
-            encoded = Dense(autoenc_max_size//(autoenc_size_ratio**(n+2)))(encoded)
+            encoded = Dense((autoenc_squeeze_size*2)//(autoenc_size_ratio**(n+2)))(encoded)
             encoded = BatchNormalization()(encoded)
             encoded = LeakyReLU()(encoded)
-        encoded = Dense(autoenc_squeeze_size)(encoded)
-        encoded = BatchNormalization()(encoded)
-        encoded = LeakyReLU()(encoded)
         
         # Output layer rep
 
@@ -901,7 +898,7 @@ class neural_network:
         validity = gan_discriminator(encoded_repr)
 
         adversarial_autoencoder = keras.models.Model(profile, [reconstructed_profile, validity])
-        adversarial_autoencoder.compile(optimizer='Adam', loss=['binary_crossentropy', 'binary_crossentropy'], metrics=[[self.autoencoder_accuracy, metrics.AUC(num_thresholds=10, curve='PR', name='aupr'), self.autoencoder_false_neg_rate], 'accuracy'], loss_weights=[0.998, 0.002])
+        adversarial_autoencoder.compile(optimizer='Adam', loss=['binary_crossentropy', 'binary_crossentropy'], metrics=[[self.autoencoder_accuracy, metrics.AUC(num_thresholds=10, curve='PR', name='aupr'), self.autoencoder_false_neg_rate], 'accuracy'], loss_weights=[0.999, 0.001])
 
         adversarial_autoencoder.summary()
 
