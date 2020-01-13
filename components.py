@@ -904,6 +904,58 @@ class neural_network:
 
         return encoder, decoder, gan_discriminator, adversarial_autoencoder
 
+class gan_continue_checker:
+
+    def __init__(self, fold, save_path):
+        self.save_path = save_path
+        self.fold = fold
+        self.checks = {
+            'lr_reduction_check':{
+                'patience':3, 
+                'min_delta':0.0005,
+                'reporting_string': 'Loss decreased less than {} over {} epochs, reducing learning rate.\n\n',
+                'trigger_result': 'lr_reduction_check',
+                },
+            'early_stopping_check':{
+                'patience':5,
+                'min_delta':0.0001,
+                'reporting_string':'Loss decreased less than {} over {} epochs, stopping training.\n\n',
+                'trigger_result': 'early_stop',
+                }, 
+            }
+        try:
+            with open(os.path.join(self.save_path, 'gan_continue_state.pkl'), mode='rb') as file:
+                saved_fold, self.absolute_min_loss,self.absolute_min_loss_epoch, self.lr_reduction_epoch = pickle.load(file)
+                assert saved_fold == self.fold
+            print('Previous state for learning rate reduction and early stopping successfully restored.')
+        except:
+            print('Could not load previous state for learning rate reduction and early stopping. Will only use prospective metrics. This is a problen if resuming from previous training.')
+            self.lr_reduction_epoch = 0
+            self.absolute_min_loss = 999999
+            self.absolute_min_loss_epoch = 0
+
+    def gan_continue_check(self, val_monitor_losses, epoch):
+        return_object = []
+        cur_epoch_loss = val_monitor_losses[-1]
+        if cur_epoch_loss < self.absolute_min_loss:
+            self.absolute_min_loss = cur_epoch_loss
+            self.absolute_min_loss_epoch = epoch
+        for check, check_dict in self.checks.items():
+            if len(val_monitor_losses) < check_dict['patience'] + 1:
+                continue
+            if check == 'lr_reduction_check' and epoch < (self.lr_reduction_epoch + check_dict['patience'] + 1):
+                continue
+            if cur_epoch_loss > (self.absolute_min_loss - check_dict['min_delta']) and epoch > (self.absolute_min_loss_epoch + check_dict['patience']):
+                print(check_dict['reporting_string'].format(check_dict['min_delta'], check_dict['patience']))
+                if check == 'lr_reduction_check':
+                    self.lr_reduction_epoch = epoch
+                return_object.append(check_dict['trigger_result'])
+        print('Current epoch monitored loss: {:.5f}'.format(cur_epoch_loss))
+        print('Absolute minimum loss: {:.5f} at epoch {}\n\n'.format(self.absolute_min_loss, self.absolute_min_loss_epoch + 1))
+        with open(os.path.join(self.save_path, 'gan_continue_state.pkl'), mode='wb') as file:
+            pickle.dump((self.fold, self.absolute_min_loss,self.absolute_min_loss_epoch, self.lr_reduction_epoch), file)
+        return return_object
+
 
 class EpochLoggerCallback(keras.callbacks.Callback):
 
@@ -1016,6 +1068,23 @@ class visualization:
             plt.savefig(os.path.join(save_path, 'loss_history.png'))
             plt.gcf().clear()
 
+    def plot_gan_discacc_history(self, df, save_path):
+        loss_df = df[['accuracy', 'model_accuracy', 'val_model_accuracy']].copy()
+        loss_df.rename(inplace=True, index=str, columns={
+            'accuracy': 'Disc train acc', 'model_accuracy': 'Fool rate', 'val_model_accuracy': 'Val fool rate'})
+        loss_df = loss_df.stack().reset_index()
+        loss_df.rename(inplace=True, index=str, columns={
+                       'level_0': 'Epoch', 'level_1': 'Metric', 0: 'Result'})
+        loss_df['Epoch'] = loss_df['Epoch'].astype('int8')
+        sns.set(style='darkgrid')
+        sns.relplot(x='Epoch', y='Result', hue='Metric',
+                    kind='line', data=loss_df)
+        if self.in_ipynb:
+            plt.show()
+        else:
+            plt.savefig(os.path.join(save_path, 'loss_history.png'))
+            plt.gcf().clear()
+
     def plot_crossval_accuracy_history(self, df, save_path):
         # Select only useful columns
         cv_results_df_filtered = df[['sparse_top30_accuracy', 'val_sparse_top30_accuracy', 'sparse_top10_accuracy',
@@ -1106,3 +1175,30 @@ class visualization:
                 save_path, 'cross_val_acc_history.png'))
         # Clear
         plt.gcf().clear()
+
+    def plot_crossval_gan_discacc_history(self, df, save_path):
+        # Select only useful columns
+        cv_results_df_filtered = df[['accuracy', 'model_accuracy', 'val_model_accuracy']].copy()
+        # Rename columns to clearer names
+        cv_results_df_filtered.rename(inplace=True, index=str, columns={
+            'accuracy': 'Disc train acc', 'model_accuracy': 'Fool rate', 'val_model_accuracy': 'Val fool rate'})
+        # Structure the dataframe as expected by Seaborn
+        cv_results_graph_df = cv_results_df_filtered.stack().reset_index()
+        cv_results_graph_df.rename(inplace=True, index=str, columns={
+            'level_0': 'Split', 'level_1': 'Metric', 0: 'Result'})
+        # Make sure the splits are int to avoid weird ordering effects in the plot
+        cv_results_graph_df['Split'] = cv_results_graph_df['Split'].astype(
+            'int8')
+        # Plot
+        sns.set(style='darkgrid')
+        sns.relplot(x='Split', y='Result', hue='Metric',
+                    kind='line', data=cv_results_graph_df)
+        # Output the plot
+        if self.in_ipynb:
+            plt.show()
+        else:
+            plt.savefig(os.path.join(
+                save_path, 'cross_val_discriminator_history.png'))
+        # Clear
+        plt.gcf().clear()
+
