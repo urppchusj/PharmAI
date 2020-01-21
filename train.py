@@ -79,7 +79,7 @@ except:
         # Data parameters
         # False prepares all data, True samples a number of encounters for faster execution, useful for debugging or testing
         'RESTRICT_DATA': False,
-        'RESTRICT_SAMPLE_SIZE':1000, # The number of encounters to sample in the restricted data.
+        'RESTRICT_SAMPLE_SIZE':2000, # The number of encounters to sample in the restricted data.
         'DATA_DIR': '1yr',  # Where to find the preprocessed data.
 
         # Word2vec parameters
@@ -110,7 +110,7 @@ except:
         'CONCAT_LSTM_SIZE': 8, # 512 for retrospective, irrelevant for prospective or retrospective-autoenc
         'CONCAT_TOTAL_SIZE': 128, # 512 for retrospective, 256 for prospective
         'DENSE_SIZE': 256, #  128 for retrospective, 256 for prospective
-        'DROPOUT': 0.1, # 0.3 for retrospective, 0.2 for prospective
+        'DROPOUT': 0, # 0.3 for retrospective, 0.2 for prospective
         'L2_REG': 0,
         'SEQUENCE_LENGTH': 30,
 
@@ -118,11 +118,11 @@ except:
         # Number of batchnorm/dense/dropout blocks after input into autoencoder
         'N_ENC_DEC_BLOCKS':1,
         # Size of largest encoder (first) and decoder (last) dense layer
-        'AUTOENC_MAX_SIZE':128,
+        'AUTOENC_MAX_SIZE':256,
         # Denominator for division of initial size for subsequent layers
         'AUTOENC_SIZE_RATIO':2,
         # Autoencoder latent representation layer size
-        'AUTOENC_SQUEEZE_SIZE':32,
+        'AUTOENC_SQUEEZE_SIZE':128,
         # Discriminator will be like the encoder part of the autoencoder but with a single node instead of the latent representation layer size
 
         # Neural network training parameters,
@@ -346,6 +346,10 @@ for i in range(initial_fold, loop_iters):
         '''
         gan_encoder, gan_decoder, gan_discriminator, gan_adv_autoencoder = n.aaa(param.N_ENC_DEC_BLOCKS, param.AUTOENC_MAX_SIZE, param.AUTOENC_SIZE_RATIO, param.AUTOENC_SQUEEZE_SIZE, pse_shape, param.DROPOUT)
 
+        if (param.CROSS_VALIDATE == True and i == 0) or (param.CROSS_VALIDATE == False):
+            tf.keras.utils.plot_model(
+                gan_adv_autoencoder, to_file=os.path.join(save_path, 'model.png'))
+        
         # Custom training loop
         c = gan_continue_checker(i, save_path)
         for epoch in range(initial_epoch, training_epochs):
@@ -368,13 +372,16 @@ for i in range(initial_fold, loop_iters):
                 latent_from_data = gan_encoder.predict(batch_data_X['pse_input'])
                 latent_generated = np.random.normal(size=(len(batch_data_X['pse_input']), param.AUTOENC_SQUEEZE_SIZE))
 
-                d_loss_generated = gan_discriminator.train_on_batch(latent_generated, ones_label)
-                d_loss_from_data = gan_discriminator.train_on_batch(latent_from_data, zeros_label) 
+                reconstructed_from_data = gan_decoder.predict(latent_from_data)
+                reconstructed_generated = gan_decoder.predict(latent_generated)
+
+                d_loss_generated = gan_discriminator.train_on_batch(reconstructed_generated, ones_label)
+                d_loss_from_data = gan_discriminator.train_on_batch(reconstructed_from_data, zeros_label)
                 d_loss = 0.5 * np.add(d_loss_generated, d_loss_from_data)
 
                 # Train generator
 
-                g_loss = gan_adv_autoencoder.train_on_batch(batch_data_X['pse_input'], [batch_data_y['main_output'], ones_label])
+                g_loss = gan_adv_autoencoder.train_on_batch(batch_data_X['pse_input'], [batch_data_y['main_output'], ones_label, latent_from_data])
 
                 d_losses.append(d_loss)
                 g_losses.append(g_loss)
@@ -402,8 +409,9 @@ for i in range(initial_fold, loop_iters):
                     
                     batch_data_X, batch_data_y = test_generator.__getitem__(batch_idx)
                     ones_label = np.ones((len(batch_data_X['pse_input']),1))
+                    latent_repr = gan_encoder.predict(batch_data_X['pse_input'])
 
-                    g_loss = gan_adv_autoencoder.test_on_batch(batch_data_X['pse_input'], [batch_data_y['main_output'], ones_label])
+                    g_loss = gan_adv_autoencoder.test_on_batch(batch_data_X['pse_input'], [batch_data_y['main_output'], ones_label, latent_repr])
 
                     g_val_losses.append(g_loss)
                     # In current config model_2_loss is the loss of the autoencoder and it is at index 1 of g_loss and g_val_losses
@@ -419,10 +427,10 @@ for i in range(initial_fold, loop_iters):
 
                 all_names = all_names + val_names
                 all_losses = np.hstack((all_losses, g_val_losses)).tolist()
-            
+                
                 # Sample n fake profiles
-                n_profiles = 5
-
+                n_profiles = 3
+                
                 fake_reconsts = gan_decoder.predict(np.random.normal(size=(n_profiles, param.AUTOENC_SQUEEZE_SIZE)))
                 fake_reconst_matrix = (fake_reconsts >= 0.5) * 1
                 fake_reconst_labels = le.inverse_transform(fake_reconst_matrix)
@@ -432,7 +440,7 @@ for i in range(initial_fold, loop_iters):
                     profile.sort()
                     print('Profile: \n{}'.format(profile))
                 print('\n\n')
-
+                
                 # Test n reconstructions
 
                 sampled_profiles = random.sample(active_meds_test, n_profiles)
@@ -448,7 +456,13 @@ for i in range(initial_fold, loop_iters):
                     profile.sort()
                     atypical_med.sort()
                     print('Profile: \n{}\nAtypicals: \n{}\n'.format(profile, atypical_med))
-                    
+                
+                continue_check = c.gan_continue_check(val_monitor_losses,epoch)
+                if 'early_stop' in continue_check:
+                    break
+                elif 'reduce_lr' in continue_check:
+                    cur_lr = gan_adv_autoencoder.optimizer.lr.numpy()
+                    keras.backend.set_value(gan_adv_autoencoder.optimizer.lr, cur_lr/10)
                     
             epoch_results_df = pd.DataFrame.from_dict(
                 {epoch: dict(zip(all_names, all_losses))}, orient='index')
@@ -469,13 +483,6 @@ for i in range(initial_fold, loop_iters):
             # Save that the epoch completed
             with open(os.path.join(save_path, 'done_epochs.pkl'), mode='wb') as file:
                 pickle.dump(epoch, file)
-
-            continue_check = c.gan_continue_check(val_monitor_losses,epoch)
-            if 'early_stop' in continue_check:
-                break
-            elif 'reduce_lr' in continue_check:
-                cur_lr = gan_adv_autoencoder.optimizer.lr.numpy()
-                keras.backend.set_value(gan_adv_autoencoder.optimizer.lr, cur_lr/10)
 
         if param.CROSS_VALIDATE:
             # Save that the fold completed successfully
@@ -583,12 +590,12 @@ if param.CROSS_VALIDATE:
     plotting_df = pd.read_csv(os.path.join(save_path, 'cv_results.csv'))
     if param.MODE == 'retrospective-gan':
         plotting_df.rename(inplace=True, index=str, columns={
-            'model_2_autoencoder_accuracy': 'autoencoder_accuracy',
-            'val_model_2_autoencoder_accuracy': 'val_autoencoder_accuracy',
-            'model_2_aupr': 'aupr',
-            'val_model_2_aupr': 'val_aupr',
-            'model_2_autoencoder_false_neg_rate': 'autoencoder_false_neg_rate',
-            'val_model_2_autoencoder_false_neg_rate': 'val_autoencoder_false_neg_rate'
+            'model_3_autoencoder_accuracy': 'autoencoder_accuracy',
+            'val_model_3_autoencoder_accuracy': 'val_autoencoder_accuracy',
+            'model_3_aupr': 'aupr',
+            'val_model_3_aupr': 'val_aupr',
+            'model_3_autoencoder_false_neg_rate': 'autoencoder_false_neg_rate',
+            'val_model_3_autoencoder_false_neg_rate': 'val_autoencoder_false_neg_rate'
         })
         v.plot_crossval_autoenc_accuracy_history(plotting_df, save_path)
         v.plot_crossval_gan_discacc_history(plotting_df, save_path)
@@ -602,12 +609,12 @@ elif param.VALIDATE:
     plotting_df = pd.read_csv(os.path.join(save_path, 'training_history.csv'))
     if param.MODE == 'retrospective-gan':
         plotting_df.rename(inplace=True, index=str, columns={
-            'model_2_autoencoder_accuracy': 'autoencoder_accuracy',
-            'val_model_2_autoencoder_accuracy': 'val_autoencoder_accuracy',
-            'model_2_aupr': 'aupr',
-            'val_model_2_aupr': 'val_aupr',
-            'model_2_autoencoder_false_neg_rate': 'autoencoder_false_neg_rate',
-            'val_model_2_autoencoder_false_neg_rate': 'val_autoencoder_false_neg_rate'
+            'model_3_autoencoder_accuracy': 'autoencoder_accuracy',
+            'val_model_3_autoencoder_accuracy': 'val_autoencoder_accuracy',
+            'model_3_aupr': 'aupr',
+            'val_model_3_aupr': 'val_aupr',
+            'model_3_autoencoder_false_neg_rate': 'autoencoder_false_neg_rate',
+            'val_model_3_autoencoder_false_neg_rate': 'val_autoencoder_false_neg_rate'
         })
         v.plot_autoenc_accuracy_history(plotting_df, save_path)
         v.plot_gan_discacc_history(plotting_df, save_path)

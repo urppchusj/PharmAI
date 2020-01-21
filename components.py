@@ -624,6 +624,9 @@ class neural_network:
         false_negs = math.subtract(true, correct)
         return math.reduce_mean(math.xdivy(false_negs, true))
 
+    def get_output_shape_for(self, input_shape):
+        return (input_shape[0][0], 1)
+
     # Callbacks during training
     def callbacks(self, save_path, n_fold, callback_mode='train_with_valid', learning_rate_schedule=None):
 
@@ -803,10 +806,10 @@ class neural_network:
     def gan_encoder(self, n_enc_dec_blocks, autoenc_max_size, autoenc_size_ratio, autoenc_squeeze_size, pse_shape, dropout):
 
         Dense = keras.layers.Dense
-        #Dropout = keras.layers.Dropout
+        Dropout = keras.layers.Dropout
         Input = keras.layers.Input
         BatchNormalization = keras.layers.BatchNormalization
-        LeakyReLU = keras.layers.LeakyReLU
+        LeakyReLU = keras.layers.ReLU
         Model = keras.models.Model
 
         # Input
@@ -817,17 +820,25 @@ class neural_network:
         # First layer is dropout like a denoising autoencoder
         #encoded = Dropout(dropout)(pse_input)
         encoded = Dense(autoenc_max_size)(pse_input)
-        encoded = BatchNormalization()(encoded)
+        #encoded = BatchNormalization()(encoded)
         encoded = LeakyReLU()(encoded)
+        encoded = Dropout(dropout)(encoded)
         for n in range(n_enc_dec_blocks-1):
             encoded = Dense(autoenc_max_size//(autoenc_size_ratio**(n+1)))(encoded)
-            encoded = BatchNormalization()(encoded)
+            #encoded = BatchNormalization()(encoded)
             encoded = LeakyReLU()(encoded)
+            encoded = Dropout(dropout)(encoded)
         
-        # Latent rep
+        
+        # Latent rep (aae)
         mu = Dense(autoenc_squeeze_size)(encoded)
         log_var = Dense(autoenc_squeeze_size)(encoded)
         latent_repr = Sampling()([mu, log_var])
+        
+        '''
+        # Latent rep (bigan)
+        latent_repr = Dense(autoenc_squeeze_size)(encoded)
+        '''
 
         return Model(pse_input, latent_repr)
     
@@ -835,19 +846,22 @@ class neural_network:
 
         Dense = keras.layers.Dense
         Input = keras.layers.Input
-        BatchNormalization = keras.layers.BatchNormalization
-        LeakyReLU = keras.layers.LeakyReLU
+        Dropout = keras.layers.Dropout
+        #BatchNormalization = keras.layers.BatchNormalization
+        LeakyReLU = keras.layers.ReLU
         Model = keras.models.Model
 
         z = Input(shape=(autoenc_squeeze_size,))
         # Decoder
         decoded = Dense(autoenc_max_size//(autoenc_size_ratio**(n_enc_dec_blocks-1)))(z)
-        decoded = BatchNormalization()(decoded)
+        #decoded = BatchNormalization()(decoded)
         decoded = LeakyReLU()(decoded)
+        decoded = Dropout(dropout)(decoded)
         for n in range(n_enc_dec_blocks-1):
             decoded = Dense(autoenc_max_size//(autoenc_size_ratio**(n_enc_dec_blocks-(n+2))))(decoded)
-            decoded = BatchNormalization()(decoded)
+            #decoded = BatchNormalization()(decoded)
             decoded = LeakyReLU()(decoded)
+            decoded = Dropout(dropout)(decoded)
         reconstructed = Dense(pse_shape, activation='sigmoid', name='main_output')(decoded)
 
         return Model(z, reconstructed)
@@ -857,21 +871,29 @@ class neural_network:
         Dense = keras.layers.Dense
         Input = keras.layers.Input
         BatchNormalization = keras.layers.BatchNormalization
-        LeakyReLU = keras.layers.LeakyReLU
+        LeakyReLU = keras.layers.ReLU
         Model = keras.models.Model
         
         # Input
-        candidate = Input(shape=(autoenc_squeeze_size,),
+        candidate = Input(shape=(pse_shape,),
                           dtype='float32', name='candidate_input')
 
         # Encoder
-        encoded = Dense((autoenc_squeeze_size*2)//autoenc_size_ratio)(candidate)
+        encoded = Dense(4)(candidate)
+        encoded = BatchNormalization()(encoded)
         encoded = LeakyReLU()(encoded)
+        encoded = Dense(4)(encoded)
+        encoded = BatchNormalization()(encoded)
+        encoded = LeakyReLU()(encoded)
+        encoded = Dense(4)(encoded)
+        encoded = BatchNormalization()(encoded)
+        encoded = LeakyReLU()(encoded)
+        '''
         for n in range(n_enc_dec_blocks-1):
-            encoded = Dense((autoenc_squeeze_size*2)//(autoenc_size_ratio**(n+2)))(encoded)
-            encoded = BatchNormalization()(encoded)
+            encoded = Dense((autoenc_max_size//4)//(autoenc_size_ratio**(n+1)))(encoded)
+            #encoded = BatchNormalization()(encoded)
             encoded = LeakyReLU()(encoded)
-        
+        '''
         # Output layer rep
 
         validity = Dense(1, activation='sigmoid', name='discriminator_output')(encoded)
@@ -881,27 +903,30 @@ class neural_network:
     def aaa(self, n_enc_dec_blocks, autoenc_max_size, autoenc_size_ratio, autoenc_squeeze_size, pse_shape, dropout):
 
         gan_discriminator = self.gan_discriminator(n_enc_dec_blocks, autoenc_max_size, autoenc_size_ratio, autoenc_squeeze_size, pse_shape, dropout)
-        gan_discriminator.compile(optimizer='Adam', loss=['binary_crossentropy'], metrics=['accuracy'])
+        gan_discriminator.compile(optimizer=keras.optimizers.Adam(learning_rate=1e-4), loss=['binary_crossentropy'], metrics=['accuracy'])
         gan_discriminator.summary()
 
         encoder = self.gan_encoder(n_enc_dec_blocks, autoenc_max_size, autoenc_size_ratio, autoenc_squeeze_size, pse_shape, dropout)
         encoder.summary()
+        encoder2 = self.gan_encoder(n_enc_dec_blocks, autoenc_max_size, autoenc_size_ratio, autoenc_squeeze_size, pse_shape, dropout)
+        encoder2.summary()
         decoder = self.gan_decoder(n_enc_dec_blocks, autoenc_max_size, autoenc_size_ratio, autoenc_squeeze_size, pse_shape, dropout)
         decoder.summary()
 
-        profile = keras.layers.Input(shape=pse_shape)
+        profile = keras.layers.Input(shape=(pse_shape,))
         encoded_repr = encoder(profile)
         reconstructed_profile = decoder(encoded_repr)
+        reconstructed_latent = encoder2(reconstructed_profile)
 
         gan_discriminator.trainable = False
 
-        validity = gan_discriminator(encoded_repr)
+        validity = gan_discriminator(profile)
 
-        adversarial_autoencoder = keras.models.Model(profile, [reconstructed_profile, validity])
-        adversarial_autoencoder.compile(optimizer='Adam', loss=['binary_crossentropy', 'binary_crossentropy'], metrics=[[self.autoencoder_accuracy, metrics.AUC(num_thresholds=10, curve='PR', name='aupr'), self.autoencoder_false_neg_rate], 'accuracy'], loss_weights=[0.999, 0.001])
+        adversarial_autoencoder = keras.models.Model(profile, [reconstructed_profile, validity, reconstructed_latent])
+        adversarial_autoencoder.compile(optimizer='Adam', loss=['binary_crossentropy', 'binary_crossentropy', 'mse'], metrics=[[self.autoencoder_accuracy, metrics.AUC(num_thresholds=10, curve='PR', name='aupr'), self.autoencoder_false_neg_rate], 'accuracy', 'mse'], loss_weights=[0.5, 0.2, 0.3])
 
         adversarial_autoencoder.summary()
-
+        
         return encoder, decoder, gan_discriminator, adversarial_autoencoder
 
 class gan_continue_checker:
@@ -911,13 +936,13 @@ class gan_continue_checker:
         self.fold = fold
         self.checks = {
             'lr_reduction_check':{
-                'patience':3, 
+                'patience':7, 
                 'min_delta':0.0005,
                 'reporting_string': 'Loss decreased less than {} over {} epochs, reducing learning rate.\n\n',
-                'trigger_result': 'lr_reduction_check',
+                'trigger_result': None, #'lr_reduction_check',
                 },
             'early_stopping_check':{
-                'patience':5,
+                'patience':20,
                 'min_delta':0.0001,
                 'reporting_string':'Loss decreased less than {} over {} epochs, stopping training.\n\n',
                 'trigger_result': 'early_stop',
