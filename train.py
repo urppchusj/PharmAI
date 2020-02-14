@@ -66,21 +66,29 @@ except:
         # retrospective for medication profile analysis, prospective for order prediction,
         # retrospective-autoenc for medication profile analysis with autoencoder,
         # retrospective-gan for medication profile analysis with autoencoder GAN
-        'MODE': 'retrospective-gan',
+        'MODE': 'retrospective-autoenc',
+        # SPLIT MODE, use 'year' for preprocessed data keyed by year or 'enc' for preprocessed data keyed by enc
+        'SPLIT_MODE':'year',
+
+        # Parameters for year split modes
+        'NUM_TRAINING_YEARS':4,
+        'MAX_YEAR_IN_SET':2017,
+
         # Keep chronological sequence when splitting for validation
-        'KEEP_TIME_ORDER':True, # True for local dataset, False for mimic
+        'KEEP_TIME_ORDER':True, # True for local dataset, False for mimic, no effect for year split mode
         'VAL_SPLIT_SEED':random_seed, # Seed to get identical splits when resuming training if KEEP_TIME_ORDER is False
         # True to do cross-val, false to do single training run with validation
-        'CROSS_VALIDATE': False,
-        'N_CROSS_VALIDATION_FOLDS': 5,
+
+        'CROSS_VALIDATE': True,
+        'N_CROSS_VALIDATION_FOLDS': 3,
         # validate when doing a single training run. Cross-validation has priority over this
         'VALIDATE': True,
 
         # Data parameters
         # False prepares all data, True samples a number of encounters for faster execution, useful for debugging or testing
-        'RESTRICT_DATA': False,
-        'RESTRICT_SAMPLE_SIZE':2000, # The number of encounters to sample in the restricted data.
-        'DATA_DIR': '1yr',  # Where to find the preprocessed data.
+        'RESTRICT_DATA': True,
+        'RESTRICT_SAMPLE_SIZE':2000, # The number of encounters to sample in the restricted data / sample by year in year split mode
+        'DATA_DIR': '20yr_byyear',  # Where to find the preprocessed data.
 
         # Word2vec parameters
         'W2V_ALPHA': 0.013, # for local dataset 0.013, for mimic 0.013
@@ -96,7 +104,7 @@ except:
         'USE_LSI': False,  # False: encode profile state as multi-hot. True: perform Tf-idf then tsvd on the profile state
         'TSVD_N_COMPONENTS': 200,  # Number of components on the lsi-transformed profile state
 
-        # Neural network parameters
+        # Neural network parameters (for prospective or retrospective modes)
         # Number of additional LSTM layers (minimum 1 not included in this count)
         'N_LSTM': 0,
         # Number of dense layers after lstm (minimum 0):
@@ -107,14 +115,14 @@ except:
         'N_DENSE': 2,
         'LSTM_SIZE': 256, # 512 for retrospective, 128 for prospective
         'DENSE_PSE_SIZE': 256, # 256 for retrospective, 128 for prospective
-        'CONCAT_LSTM_SIZE': 8, # 512 for retrospective, irrelevant for prospective or retrospective-autoenc
+        'CONCAT_LSTM_SIZE': 8, # 512 for retrospective, irrelevant for prospective
         'CONCAT_TOTAL_SIZE': 128, # 512 for retrospective, 256 for prospective
         'DENSE_SIZE': 256, #  128 for retrospective, 256 for prospective
         'DROPOUT': 0, # 0.3 for retrospective, 0.2 for prospective
         'L2_REG': 0,
         'SEQUENCE_LENGTH': 30,
 
-        # Neural network paramters for retrospective-gan mode
+        # Neural network paramters for retrospective-gan or retrospective-autoenc mode
         # Number of batchnorm/dense/dropout blocks after input into autoencoder
         'N_ENC_DEC_BLOCKS':1,
         # Size of largest encoder (first) and decoder (last) dense layer
@@ -123,7 +131,13 @@ except:
         'AUTOENC_SIZE_RATIO':2,
         # Autoencoder latent representation layer size
         'AUTOENC_SQUEEZE_SIZE':128,
+        # Number of blocks in the feature extractor [GAN only](discriminator adds an additional layer with size 1 as an output layer)
+        'FEAT_EXT_N_BLOCKS':2,
+        # Size of dense layers in the feature extractor [GAN only]
+        'FEAT_EXT_SIZE':4,
         # Discriminator will be like the encoder part of the autoencoder but with a single node instead of the latent representation layer size
+        # Loss weights are the relative weights of each loss in this order: contextual loss (binary), adversarial loss (mse), validity (must be zero) and encoder loss (mse)
+        'LOSS_WEIGHTS':[0.65, 0.27, 0, 0.08],
 
         # Neural network training parameters,
         'BATCH_SIZE': 256,
@@ -186,7 +200,7 @@ in_ipynb = check_ipynb().is_inipynb()
 # %%
 # Load the data
 
-d = data(param.DATA_DIR, param.MODE, param.KEEP_TIME_ORDER)
+d = data(param.DATA_DIR, param.MODE, param.KEEP_TIME_ORDER, param.VAL_SPLIT_SEED)
 
 if os.path.isfile(os.path.join(save_path, 'sampled_encs.pkl')):
     enc_file = os.path.join(save_path, 'sampled_encs.pkl')
@@ -194,8 +208,8 @@ if os.path.isfile(os.path.join(save_path, 'sampled_encs.pkl')):
 else:
     enc_file = False
 
-# Retrospective-gan mode does not require profiles (uses only active meds)
-if param.MODE == 'retrospective-gan':
+# Retrospective-gan and retrospective-autoenc modes do not require profiles (uses only active meds)
+if param.MODE == 'retrospective-gan' or param.MODE == 'retrospective-autoenc':
     get_profiles = False
 else:
     get_profiles = True
@@ -210,10 +224,11 @@ else:
 # Split encounters into a train and test set, if doing cross-validation
 # prepare the appropriate number of folds
 
-if param.CROSS_VALIDATE:
-    d.cross_val_split(param.N_CROSS_VALIDATION_FOLDS, split_seed=param.VAL_SPLIT_SEED)
-elif param.VALIDATE:
-    d.split(split_seed=param.VAL_SPLIT_SEED)
+if param.SPLIT_MODE == 'enc':
+    if param.CROSS_VALIDATE:
+        d.cross_val_split(param.N_CROSS_VALIDATION_FOLDS, split_seed=param.VAL_SPLIT_SEED)
+    elif param.VALIDATE:
+        d.split(split_seed=param.VAL_SPLIT_SEED)
 
 # %% [markdown]
 # ## Training execution
@@ -244,8 +259,18 @@ for i in range(initial_fold, loop_iters):
         get_valid=False
         cross_val_fold = None
 
-    profiles_train, targets_train, pre_seq_train, post_seq_train, active_meds_train, active_classes_train, depa_train, targets_test, pre_seq_test, post_seq_test, active_meds_test, active_classes_test, depa_test, definitions = d.make_lists(get_valid=get_valid,
+    if param.SPLIT_MODE == 'enc':
+        profiles_train, targets_train, pre_seq_train, post_seq_train, active_meds_train, active_classes_train, depa_train, targets_test, pre_seq_test, post_seq_test, active_meds_test, active_classes_test, depa_test, definitions = d.make_lists(get_valid=get_valid,
         cross_val_fold=cross_val_fold)
+    elif param.SPLIT_MODE == 'year':
+        valid_year_begin = param.MAX_YEAR_IN_SET - i
+        valid_years = range(valid_year_begin, valid_year_begin+1)
+        train_years_end = valid_year_begin - 1
+        train_years_begin = train_years_end - param.NUM_TRAINING_YEARS + 1
+        training_years = range(train_years_begin, train_years_end + 1)
+        print('Performing cross-validation fold {} with training data years: {} - {} and validation year: {}\n\n'.format(i, train_years_begin, train_years_end-1, valid_year_begin))
+        profiles_train, targets_train, pre_seq_train, post_seq_train, active_meds_train, active_classes_train, depa_train, targets_test, pre_seq_test, post_seq_test, active_meds_test, active_classes_test, depa_test, definitions = d.make_lists_by_year(train_years=training_years, valid_years=valid_years, shuffle_train_set=True)
+
     if param.MODE == 'retrospective-autoenc' or param.MODE == 'retrospective-gan':
         targets_train = active_meds_train
         targets_test = active_meds_test
@@ -258,7 +283,7 @@ for i in range(initial_fold, loop_iters):
     # Word2vec embeddings
     # Create a word2vec pipeline and train word2vec embeddings in that pipeline
     # on the training set profiles. Optionnaly export word2vec embeddings.
-    if param.MODE != 'retrospective-gan':
+    if param.MODE not in ['retrospective-autoenc', 'retrospective-gan']:
         try:
             n_fold, w2v = joblib.load(os.path.join(save_path, 'w2v.joblib'))
             assert n_fold == i
@@ -280,7 +305,7 @@ for i in range(initial_fold, loop_iters):
         print('Successfully loaded PSE pipeline for current fold.')
     except:
         print('Could not load PSE pipeline for current fold...')
-        if param.MODE == 'retrospective-gan':
+        if param.MODE == 'retrospective-gan' or param.MODE == 'retrospective-autoenc':
             pse_data = tp.prepare_pse_data(active_meds_train, [], [])
         else:
             pse_data = tp.prepare_pse_data(
@@ -304,7 +329,7 @@ for i in range(initial_fold, loop_iters):
     # Neural network
 
     # Build the generators, prepare the variables for fitting
-    if param.MODE != 'retrospective-gan':
+    if param.MODE not in ['retrospective-gan', 'retrospective-autoenc']:
         w2v_step = w2v.named_steps['w2v']
     else:
         w2v_step = None
@@ -344,7 +369,7 @@ for i in range(initial_fold, loop_iters):
         else:
             gan_encoder, gan_decoder, gan_discriminator, gan_adv_autoencoder = n.aaa(param.N_ENC_DEC_BLOCKS, param.AUTOENC_MAX_SIZE, param.AUTOENC_SIZE_RATIO, param.AUTOENC_SQUEEZE_SIZE, pse_shape, param.DROPOUT)
         '''
-        gan_encoder, gan_decoder, gan_discriminator, gan_adv_autoencoder = n.aaa(param.N_ENC_DEC_BLOCKS, param.AUTOENC_MAX_SIZE, param.AUTOENC_SIZE_RATIO, param.AUTOENC_SQUEEZE_SIZE, pse_shape, param.DROPOUT)
+        gan_encoder, gan_decoder, gan_discriminator, gan_feature_extractor, gan_adv_autoencoder = n.aaa(param.N_ENC_DEC_BLOCKS, param.AUTOENC_MAX_SIZE, param.AUTOENC_SIZE_RATIO, param.AUTOENC_SQUEEZE_SIZE, param.FEAT_EXT_N_BLOCKS, param.FEAT_EXT_SIZE, pse_shape, param.DROPOUT, param.LOSS_WEIGHTS)
 
         if (param.CROSS_VALIDATE == True and i == 0) or (param.CROSS_VALIDATE == False):
             tf.keras.utils.plot_model(
@@ -370,18 +395,21 @@ for i in range(initial_fold, loop_iters):
                 zeros_label = np.zeros((len(batch_data_X['pse_input']),1))
 
                 latent_from_data = gan_encoder.predict(batch_data_X['pse_input'])
-                latent_generated = np.random.normal(size=(len(batch_data_X['pse_input']), param.AUTOENC_SQUEEZE_SIZE))
+                #latent_generated = np.random.normal(size=(len(batch_data_X['pse_input']), param.AUTOENC_SQUEEZE_SIZE))
 
                 reconstructed_from_data = gan_decoder.predict(latent_from_data)
-                reconstructed_generated = gan_decoder.predict(latent_generated)
+                #reconstructed_generated = gan_decoder.predict(latent_generated)
 
-                d_loss_generated = gan_discriminator.train_on_batch(reconstructed_generated, ones_label)
-                d_loss_from_data = gan_discriminator.train_on_batch(reconstructed_from_data, zeros_label)
+                #d_loss_generated = gan_discriminator.train_on_batch(reconstructed_generated, ones_label)
+                d_loss_generated = gan_discriminator.train_on_batch(reconstructed_from_data, ones_label)
+                #d_loss_from_data = gan_discriminator.train_on_batch(reconstructed_from_data, zeros_label)
+                d_loss_from_data = gan_discriminator.train_on_batch(batch_data_X['pse_input'], zeros_label)
                 d_loss = 0.5 * np.add(d_loss_generated, d_loss_from_data)
 
                 # Train generator
 
-                g_loss = gan_adv_autoencoder.train_on_batch(batch_data_X['pse_input'], [batch_data_y['main_output'], ones_label, latent_from_data])
+                feature_extracted = gan_feature_extractor.predict(reconstructed_from_data)
+                g_loss = gan_adv_autoencoder.train_on_batch(batch_data_X['pse_input'], [batch_data_y['main_output'], feature_extracted, ones_label, latent_from_data])
 
                 d_losses.append(d_loss)
                 g_losses.append(g_loss)
@@ -410,15 +438,16 @@ for i in range(initial_fold, loop_iters):
                     batch_data_X, batch_data_y = test_generator.__getitem__(batch_idx)
                     ones_label = np.ones((len(batch_data_X['pse_input']),1))
                     latent_repr = gan_encoder.predict(batch_data_X['pse_input'])
+                    feature_extracted = gan_feature_extractor.predict(gan_decoder.predict(latent_repr))
 
-                    g_loss = gan_adv_autoencoder.test_on_batch(batch_data_X['pse_input'], [batch_data_y['main_output'], ones_label, latent_repr])
+                    g_loss = gan_adv_autoencoder.test_on_batch(batch_data_X['pse_input'], [batch_data_y['main_output'], feature_extracted, ones_label, latent_repr])
 
                     g_val_losses.append(g_loss)
                     # In current config model_2_loss is the loss of the autoencoder and it is at index 1 of g_loss and g_val_losses
 
                 g_val_losses = np.array(g_val_losses)
                 g_val_losses = np.mean(g_val_losses, axis=0)
-                val_monitor_losses.append(g_val_losses[1])
+                val_monitor_losses.append(g_val_losses[0])
                 val_names = ['val_' + name for name in gan_adv_autoencoder.metrics_names]
 
                 print('EPOCH {} VALIDATION RESULTS:'.format(epoch+1))
@@ -427,7 +456,7 @@ for i in range(initial_fold, loop_iters):
 
                 all_names = all_names + val_names
                 all_losses = np.hstack((all_losses, g_val_losses)).tolist()
-                
+                '''
                 # Sample n fake profiles
                 n_profiles = 3
                 
@@ -456,7 +485,8 @@ for i in range(initial_fold, loop_iters):
                     profile.sort()
                     atypical_med.sort()
                     print('Profile: \n{}\nAtypicals: \n{}\n'.format(profile, atypical_med))
-                
+                '''
+
                 continue_check = c.gan_continue_check(val_monitor_losses,epoch)
                 if 'early_stop' in continue_check:
                     break
@@ -475,10 +505,11 @@ for i in range(initial_fold, loop_iters):
                 epoch_results_df.to_csv(os.path.join(
                     save_path, 'training_history.csv'), mode='a', header=False)
 
-            keras.models.save_model(gan_encoder, os.path.join(save_path, 'partially_trained_encoder_{}_{}.h5'.format(i,epoch)))
-            keras.models.save_model(gan_decoder, os.path.join(save_path, 'partially_trained_decoder_{}_{}.h5'.format(i,epoch)))
-            keras.models.save_model(gan_discriminator, os.path.join(save_path, 'partially_trained_discriminator_{}_{}.h5'.format(i,epoch)))
-            keras.models.save_model(gan_adv_autoencoder, os.path.join(save_path, 'partially_trained_adversarial_model_{}_{}.h5'.format(i,epoch)))
+            gan_encoder.save(os.path.join(save_path, 'partially_trained_encoder_{}_{}.h5'.format(i,epoch)), save_format='tf')
+            gan_decoder.save(os.path.join(save_path, 'partially_trained_decoder_{}_{}.h5'.format(i,epoch)), save_format='tf')
+            gan_discriminator.save(os.path.join(save_path, 'partially_trained_discriminator_{}_{}.h5'.format(i,epoch)), save_format='tf')
+            gan_feature_extractor.save(os.path.join(save_path, 'partially_trained_feature_extractor_{}_{}.h5'.format(i,epoch)), save_format='tf')
+            gan_adv_autoencoder.save(os.path.join(save_path, 'partially_trained_adversarial_model_{}_{}.h5'.format(i,epoch)), save_format='tf')
 
             # Save that the epoch completed
             with open(os.path.join(save_path, 'done_epochs.pkl'), mode='wb') as file:
@@ -503,8 +534,6 @@ for i in range(initial_fold, loop_iters):
             gan_decoder.save(os.path.join(save_path, 'decoder.h5'))
             gan_discriminator.save(os.path.join(save_path, 'discriminator.h5'))
             gan_adv_autoencoder.save(os.path.join(save_path, 'adversarial_model.h5'))
-        
-        # TODO plot the training graph
 
     else:
 
@@ -517,7 +546,11 @@ for i in range(initial_fold, loop_iters):
         try:
             model = tf.keras.models.load_model(os.path.join(save_path, 'partially_trained_model_{}.h5'.format(i)), custom_objects=custom_objects_dict)
         except:
-            model = n.define_model(param.LSTM_SIZE, param.N_LSTM, param.POST_LSTM_DENSE, param.DENSE_PSE_SIZE, param.CONCAT_LSTM_SIZE, param.CONCAT_TOTAL_SIZE, param.DENSE_SIZE, param.DROPOUT, param.L2_REG, param.SEQUENCE_LENGTH, param.W2V_EMBEDDING_DIM, pse_shape, param.N_PSE_DENSE, param.N_DENSE, output_n_classes)
+            if param.MODE == 'retrospective-autoenc':
+                model = n.simple_autoencoder(param.N_ENC_DEC_BLOCKS, param.AUTOENC_MAX_SIZE, param.AUTOENC_SIZE_RATIO, param.AUTOENC_SQUEEZE_SIZE, pse_shape, param.DROPOUT)
+            else:
+                model = n.define_model(param.LSTM_SIZE, param.N_LSTM, param.POST_LSTM_DENSE, param.DENSE_PSE_SIZE, param.CONCAT_LSTM_SIZE, param.CONCAT_TOTAL_SIZE, param.DENSE_SIZE, param.DROPOUT, param.L2_REG, param.SEQUENCE_LENGTH, param.W2V_EMBEDDING_DIM, pse_shape, param.N_PSE_DENSE, param.N_DENSE, output_n_classes)
+
             if (param.CROSS_VALIDATE == True and i == 0) or (param.CROSS_VALIDATE == False):
                 tf.keras.utils.plot_model(
                     model, to_file=os.path.join(save_path, 'model.png'))
@@ -595,7 +628,9 @@ if param.CROSS_VALIDATE:
             'model_3_aupr': 'aupr',
             'val_model_3_aupr': 'val_aupr',
             'model_3_autoencoder_false_neg_rate': 'autoencoder_false_neg_rate',
-            'val_model_3_autoencoder_false_neg_rate': 'val_autoencoder_false_neg_rate'
+            'val_model_3_autoencoder_false_neg_rate': 'val_autoencoder_false_neg_rate',
+            'model_4_accuracy':'model_accuracy',
+            'val_model_4_accuracy':'val_model_accuracy',
         })
         v.plot_crossval_autoenc_accuracy_history(plotting_df, save_path)
         v.plot_crossval_gan_discacc_history(plotting_df, save_path)
@@ -614,7 +649,9 @@ elif param.VALIDATE:
             'model_3_aupr': 'aupr',
             'val_model_3_aupr': 'val_aupr',
             'model_3_autoencoder_false_neg_rate': 'autoencoder_false_neg_rate',
-            'val_model_3_autoencoder_false_neg_rate': 'val_autoencoder_false_neg_rate'
+            'val_model_3_autoencoder_false_neg_rate': 'val_autoencoder_false_neg_rate',
+            'model_4_accuracy':'model_accuracy',
+            'val_model_4_accuracy':'val_model_accuracy',
         })
         v.plot_autoenc_accuracy_history(plotting_df, save_path)
         v.plot_gan_discacc_history(plotting_df, save_path)
