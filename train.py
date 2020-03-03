@@ -66,12 +66,12 @@ except:
         # retrospective for medication profile analysis, prospective for order prediction,
         # retrospective-autoenc for medication profile analysis with autoencoder,
         # retrospective-gan for medication profile analysis with autoencoder GAN
-        'MODE': 'retrospective-autoenc',
+        'MODE': 'retrospective-gan',
         # SPLIT MODE, use 'year' for preprocessed data keyed by year or 'enc' for preprocessed data keyed by enc
         'SPLIT_MODE':'year',
 
         # Parameters for year split modes
-        'NUM_TRAINING_YEARS':4,
+        'NUM_TRAINING_YEARS':10,
         'MAX_YEAR_IN_SET':2017,
 
         # Keep chronological sequence when splitting for validation
@@ -86,7 +86,7 @@ except:
 
         # Data parameters
         # False prepares all data, True samples a number of encounters for faster execution, useful for debugging or testing
-        'RESTRICT_DATA': True,
+        'RESTRICT_DATA': False,
         'RESTRICT_SAMPLE_SIZE':2000, # The number of encounters to sample in the restricted data / sample by year in year split mode
         'DATA_DIR': '20yr_byyear',  # Where to find the preprocessed data.
 
@@ -118,7 +118,7 @@ except:
         'CONCAT_LSTM_SIZE': 8, # 512 for retrospective, irrelevant for prospective
         'CONCAT_TOTAL_SIZE': 128, # 512 for retrospective, 256 for prospective
         'DENSE_SIZE': 256, #  128 for retrospective, 256 for prospective
-        'DROPOUT': 0, # 0.3 for retrospective, 0.2 for prospective
+        'DROPOUT': 0.1, # 0.3 for retrospective, 0.2 for prospective
         'L2_REG': 0,
         'SEQUENCE_LENGTH': 30,
 
@@ -130,14 +130,16 @@ except:
         # Denominator for division of initial size for subsequent layers
         'AUTOENC_SIZE_RATIO':2,
         # Autoencoder latent representation layer size
-        'AUTOENC_SQUEEZE_SIZE':128,
+        'AUTOENC_SQUEEZE_SIZE':64,
         # Number of blocks in the feature extractor [GAN only](discriminator adds an additional layer with size 1 as an output layer)
         'FEAT_EXT_N_BLOCKS':2,
         # Size of dense layers in the feature extractor [GAN only]
-        'FEAT_EXT_SIZE':4,
+        'FEAT_EXT_SIZE':64,
         # Discriminator will be like the encoder part of the autoencoder but with a single node instead of the latent representation layer size
         # Loss weights are the relative weights of each loss in this order: contextual loss (binary), adversarial loss (mse), validity (must be zero) and encoder loss (mse)
-        'LOSS_WEIGHTS':[0.65, 0.27, 0, 0.08],
+        'LOSS_WEIGHTS':[0.5, 0.3, 0, 0.2],
+        # Discriminator optimizer learning rate
+        'DISC_LR':1e-6,
 
         # Neural network training parameters,
         'BATCH_SIZE': 256,
@@ -268,7 +270,7 @@ for i in range(initial_fold, loop_iters):
         train_years_end = valid_year_begin - 1
         train_years_begin = train_years_end - param.NUM_TRAINING_YEARS + 1
         training_years = range(train_years_begin, train_years_end + 1)
-        print('Performing cross-validation fold {} with training data years: {} - {} and validation year: {}\n\n'.format(i, train_years_begin, train_years_end-1, valid_year_begin))
+        print('Performing cross-validation fold {} with training data years: {} - {} and validation year: {}\n\n'.format(i, train_years_begin, train_years_end, valid_year_begin))
         profiles_train, targets_train, pre_seq_train, post_seq_train, active_meds_train, active_classes_train, depa_train, targets_test, pre_seq_test, post_seq_test, active_meds_test, active_classes_test, depa_test, definitions = d.make_lists_by_year(train_years=training_years, valid_years=valid_years, shuffle_train_set=True)
 
     if param.MODE == 'retrospective-autoenc' or param.MODE == 'retrospective-gan':
@@ -369,7 +371,7 @@ for i in range(initial_fold, loop_iters):
         else:
             gan_encoder, gan_decoder, gan_discriminator, gan_adv_autoencoder = n.aaa(param.N_ENC_DEC_BLOCKS, param.AUTOENC_MAX_SIZE, param.AUTOENC_SIZE_RATIO, param.AUTOENC_SQUEEZE_SIZE, pse_shape, param.DROPOUT)
         '''
-        gan_encoder, gan_decoder, gan_discriminator, gan_feature_extractor, gan_adv_autoencoder = n.aaa(param.N_ENC_DEC_BLOCKS, param.AUTOENC_MAX_SIZE, param.AUTOENC_SIZE_RATIO, param.AUTOENC_SQUEEZE_SIZE, param.FEAT_EXT_N_BLOCKS, param.FEAT_EXT_SIZE, pse_shape, param.DROPOUT, param.LOSS_WEIGHTS)
+        gan_encoder, gan_decoder, gan_discriminator, gan_feature_extractor, gan_adv_autoencoder = n.aaa(param.N_ENC_DEC_BLOCKS, param.AUTOENC_MAX_SIZE, param.AUTOENC_SIZE_RATIO, param.AUTOENC_SQUEEZE_SIZE, param.FEAT_EXT_N_BLOCKS, param.FEAT_EXT_SIZE, pse_shape, param.DROPOUT, param.LOSS_WEIGHTS, param.DISC_LR)
 
         if (param.CROSS_VALIDATE == True and i == 0) or (param.CROSS_VALIDATE == False):
             tf.keras.utils.plot_model(
