@@ -137,7 +137,7 @@ except:
         'FEAT_EXT_SIZE':64,
         # Discriminator will be like the encoder part of the autoencoder but with a single node instead of the latent representation layer size
         # Loss weights are the relative weights of each loss in this order: contextual loss (binary), adversarial loss (mse), validity (must be zero) and encoder loss (mse)
-        'LOSS_WEIGHTS':[0.5, 0.3, 0, 0.2],
+        'LOSS_WEIGHTS':[0.6, 0.3, 0, 0.1],
         # Discriminator optimizer learning rate
         'DISC_LR':1e-6,
 
@@ -202,7 +202,7 @@ in_ipynb = check_ipynb().is_inipynb()
 # %%
 # Load the data
 
-d = data(param.DATA_DIR, param.MODE, param.KEEP_TIME_ORDER, param.VAL_SPLIT_SEED)
+d = data(param.DATA_DIR, param.MODE, param.KEEP_TIME_ORDER, param.SPLIT_MODE)
 
 if os.path.isfile(os.path.join(save_path, 'sampled_encs.pkl')):
     enc_file = os.path.join(save_path, 'sampled_encs.pkl')
@@ -445,7 +445,6 @@ for i in range(initial_fold, loop_iters):
                     g_loss = gan_adv_autoencoder.test_on_batch(batch_data_X['pse_input'], [batch_data_y['main_output'], feature_extracted, ones_label, latent_repr])
 
                     g_val_losses.append(g_loss)
-                    # In current config model_2_loss is the loss of the autoencoder and it is at index 1 of g_loss and g_val_losses
 
                 g_val_losses = np.array(g_val_losses)
                 g_val_losses = np.mean(g_val_losses, axis=0)
@@ -532,10 +531,8 @@ for i in range(initial_fold, loop_iters):
                     save_path, 'cv_results.csv'), mode='a', header=False)
         # Else save the models
         else:
-            gan_encoder.save(os.path.join(save_path, 'encoder.h5'))
-            gan_decoder.save(os.path.join(save_path, 'decoder.h5'))
-            gan_discriminator.save(os.path.join(save_path, 'discriminator.h5'))
-            gan_adv_autoencoder.save(os.path.join(save_path, 'adversarial_model.h5'))
+            gan_discriminator.save(os.path.join(save_path, 'discriminator.h5'), save_format='tf')
+            gan_adv_autoencoder.save(os.path.join(save_path, 'model.h5'), save_format='tf')
 
     else:
 
