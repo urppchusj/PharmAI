@@ -136,6 +136,8 @@ class data:
                 random.sample(range(len(self.enc)), restrict_sample_size))]
             with open(os.path.join(save_path, 'sampled_encs.pkl'), mode='wb') as file:
                 pickle.dump(self.enc, file)
+        # THE FOLLOWING ELIF IS INCOMPLETE AND NOT PROPERLY IMPLEMENTED
+        # TODO COMPLETE RESTRICTED DATA FOR SPLIT BY YEAR MODE
         elif restrict_data and self.split_by_mode=='year':
             print('Data restriction flag enabled under split by year, sampling {} encounters for each year...'.format(
                 restrict_sample_size))
@@ -272,10 +274,10 @@ class data:
                                         self.active_meds_train, self.active_classes_train, self.depa_train))
                     random.shuffle(shuffled)
                     self.targets_train, self.pre_seq_train, self.post_seq_train, self.active_meds_train, self.active_classes_train, self.depa_train = zip(*shuffled)
-                elif self.mode == 'retrospective-autoenc':
-                    shuffled = list(zip(self.pre_seq_train, self.active_meds_train, self.active_classes_train, self.depa_train))
+                elif self.mode in ['retrospective-autoenc', 'retrospective-gan']:
+                    shuffled = list(zip(self.active_meds_train, self.active_classes_train, self.depa_train))
                     random.shuffle(shuffled)
-                    self.pre_seq_train, self.active_meds_train, self.active_classes_train, self.depa_train = zip(*shuffled)
+                    self.active_meds_train, self.active_classes_train, self.depa_train = zip(*shuffled)
             else:
                 if self.mode == 'prospective':
                     shuffled = list(zip(self.targets_train, self.pre_seq_train,
@@ -287,10 +289,10 @@ class data:
                                         self.active_meds_train, self.depa_train))
                     random.shuffle(shuffled)
                     self.targets_train, self.pre_seq_train, self.post_seq_train, self.active_meds_train, self.depa_train = zip(*shuffled)
-                elif self.mode == 'retrospective-autoenc':
-                    shuffled = list(zip(self.pre_seq_train, self.active_meds_train, self.depa_train))
+                elif self.mode in ['retrospective-autoenc', 'retrospective-gan']:
+                    shuffled = list(zip(self.active_meds_train, self.depa_train))
                     random.shuffle(shuffled)
-                    self.pre_seq_train, self.active_meds_train, self.depa_train = zip(*shuffled)
+                    self.active_meds_train, self.depa_train = zip(*shuffled)
 
        # Print out the number of samples obtained to make sure they match.
         print('Training set: Obtained {} profiles, {} targets, {} pre sequences, {} post sequences, {} active meds, {} active classes, {} depas and {} encs.'.format(len(self.profiles_train), len(
@@ -312,32 +314,39 @@ class data:
         # Allocate profiles only if they have been loaded
         if self.profiles != None:
             self.profiles_train = list(chain.from_iterable(
-                [profiles for year, profiles in self.profiles.items()
-                    if year in train_years]))
+                [profiles for year, profiles in self.profiles.items() if year in train_years]))
         else:
             self.profiles_train = []
         self.active_meds_train = list(chain.from_iterable([active_meds for year, active_meds in self.active_meds.items() if year in train_years]))
+        self.depa_train = list(chain.from_iterable([depa for year, depa in self.depas.items() if year in train_years]))
         self.unique_drugs_train = list(set(chain.from_iterable(
             self.active_meds_train)))
 
-        # Validation set
-        print('Preparing validation dataset for years: {}...'.format(list(valid_years)))
-        self.active_meds_val = list(chain.from_iterable(
-            [active_meds for year, active_meds in self.active_meds.items() 
-                if year in valid_years]))
+        if valid_years is not None:
+            # Validation set
+            print('Preparing validation dataset for years: {}...'.format(list(valid_years)))
+            self.active_meds_val = list(chain.from_iterable(
+                [active_meds for year, active_meds in self.active_meds.items() if year in valid_years]))
+            self.depa_val = list(chain.from_iterable([depa for year, depa in self.depas.items() if year in valid_years]))
+        else:
+            self.active_meds_val = None
+            self.depa_val = None
 
         if shuffle_train_set:
             # Initial shuffle of training set
             print('Shuffling training set...')
-            random.shuffle(self.active_meds_train)
+            shuffled = list(zip(self.active_meds_train, self.depa_train))
+            random.shuffle(shuffled)
+            self.active_meds_train, self.depa_train = zip(*shuffled)
 
        # Print out the number of samples obtained to make sure they match.
-        print('Training set: Obtained {} active profiles'.format(
-            len(self.active_meds_train)))
-        print('Validation set: Obtained {} active profiles'.format(
-            len(self.active_meds_val)))
+        print('Training set: Obtained {} active profiles and {} depas'.format(
+            len(self.active_meds_train), len(self.depa_train)))
+        if valid_years is not None:
+            print('Validation set: Obtained {} active profiles and {} depas'.format(
+                len(self.active_meds_val), len(self.depa_val)))
 
-        return None, None, None, None, self.active_meds_train, None, None, None, None, None, self.active_meds_val, None, None, self.definitions
+        return None, None, None, None, self.active_meds_train, None, self.depa_train, None, None, None, self.active_meds_val, None, self.depa_val, self.definitions
 
 class transformation_pipelines:
 
@@ -579,7 +588,10 @@ class TransformedGenerator(keras.utils.Sequence):
             batch_pse = [[bp, bd]
                      for bp, bd in zip(batch_am, batch_depa)]
         else:
-            batch_pse = [[bp] for bp in batch_am]
+            if len(np.array(batch_am).shape) > 1:
+                batch_pse = batch_am
+            else:
+                batch_pse = [[bp] for bp in batch_am]
         # Transform
         transformed_pse = self.pse.transform(batch_pse)
         X['pse_input'] = transformed_pse

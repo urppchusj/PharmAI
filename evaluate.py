@@ -23,10 +23,10 @@ from matplotlib import pyplot as plt
 from sklearn.metrics import (classification_report,
                              precision_recall_fscore_support, roc_auc_score)
 from sklearn.preprocessing import label_binarize
+from tqdm import tqdm
 
 from components import (TransformedGenerator, check_ipynb, data,
                         neural_network, transformation_pipelines)
-
 
 warnings.filterwarnings('ignore',category=UserWarning)
 
@@ -40,8 +40,10 @@ warnings.filterwarnings('ignore',category=UserWarning)
 # loaded. Must be a subdirectory of "experiments". Will save there.
 # LOAD_TEST_DATA_FROM specifies where to find the test set data.
 # Must be a subdirectory of "preprocessed_data".
-LOAD_MODEL_FROM = 'retrospective-autoenc/20191008-0014'
-LOAD_TEST_DATA_FROM = 'valid'
+LOAD_MODEL_FROM = 'retrospective-gan/testfullmodel'
+LOAD_TEST_DATA_FROM = '20yr_byyear'
+# List of years to use for validation set in 'year' SPLIT_MODE
+VALID_YEARS = [2017]
 
 save_path = os.path.join('experiments', LOAD_MODEL_FROM)
 with open(os.path.join(save_path, 'hp.pkl'), mode='rb') as file:
@@ -62,7 +64,7 @@ in_ipynb = check_ipynb().is_inipynb()
 #%%
 # Load the data
 
-d = data(LOAD_TEST_DATA_FROM, param.MODE)
+d = data(LOAD_TEST_DATA_FROM, param.MODE, param.KEEP_TIME_ORDER, param.SPLIT_MODE)
 
 if os.path.isfile(os.path.join(save_path, 'sampled_encs.pkl')):
     print('USE CAUTION ! Loaded model was trained with RESTRICTED DATA !')
@@ -73,7 +75,13 @@ d.load_data(save_path=save_path, get_profiles=False)
 # Make the data lists
 
 #%%
-_, targets, pre_seqs, post_seqs, active_meds, active_classes, depas, _, _, _, _, _, _, definitions = d.make_lists(get_valid=False, shuffle_train_set=False)
+
+if param.SPLIT_MODE == 'enc':
+	_, targets, pre_seqs, post_seqs, active_meds, active_classes, depas, _, _, _, _, _, _, definitions = d.make_lists(get_valid=False, shuffle_train_set=False)
+elif param.SPLIT_MODE == 'year':
+    print('Performing evaluation with data: {} \n\n'.format(VALID_YEARS))
+    _, targets, pre_seqs, post_seqs, active_meds, active_classes, depas, _, _, _, _, _, _, definitions = d.make_lists_by_year(train_years=VALID_YEARS, valid_years=None, shuffle_train_set=False)
+
 
 #%%[markdown]
 # ## Word2vec embeddings
@@ -81,7 +89,8 @@ _, targets, pre_seqs, post_seqs, active_meds, active_classes, depas, _, _, _, _,
 # Load the previously fitted word2vec pipeline
 
 #%%
-_, w2v = joblib.load(os.path.join(save_path, 'w2v.joblib'))
+if param.MODE not in ['retrospective-autoenc', 'retrospective-gan']:
+	_, w2v = joblib.load(os.path.join(save_path, 'w2v.joblib'))
 
 #%%[markdown]
 # ## Profile state encoder (PSE)
@@ -104,7 +113,7 @@ _, _, le = joblib.load(os.path.join(save_path, 'le.joblib'))
 # are discarded
 
 #%%
-if param.MODE == 'retrospective-autoenc':
+if param.MODE in ['retrospective-gan', 'retrospective-autoenc']:
 	# No filtering
 	filtered_targets = active_meds
 	filtered_pre_seqs = pre_seqs
@@ -112,7 +121,6 @@ if param.MODE == 'retrospective-autoenc':
 	filtered_active_meds = active_meds
 	filtered_active_classes = active_classes
 	filtered_depas = depas
-	post_discard_n_targets = len(filtered_targets)
 else:
 	print('Filtering unseen targets...')
 	pre_discard_n_targets = len(targets)
@@ -133,7 +141,10 @@ else:
 # ### Sequence generators
 
 # Build the generators, prepare the variables for fitting
-w2v_step = w2v.named_steps['w2v']
+if param.MODE not in ['retrospective-gan', 'retrospective-autoenc']:
+	w2v_step = w2v.named_steps['w2v']
+else:
+	w2v_step = None
 eval_generator = TransformedGenerator(param.MODE, w2v_step, param.USE_LSI, pse, le, filtered_targets, filtered_pre_seqs, filtered_post_seqs, filtered_active_meds, filtered_active_classes, filtered_depas, param.W2V_EMBEDDING_DIM, param.SEQUENCE_LENGTH, param.BATCH_SIZE, shuffle=False)
 
 #%%[markdown]
@@ -141,10 +152,11 @@ eval_generator = TransformedGenerator(param.MODE, w2v_step, param.USE_LSI, pse, 
 
 #%%
 n = neural_network(param.MODE)
-if param.MODE == 'retrospective-autoenc':
-	custom_objects_dict = {'autoencoder_accuracy':n.autoencoder_accuracy}
+if param.MODE in ['retrospective-autoenc', 'retrospective-gan']:
+	custom_objects_dict = {'autoencoder_accuracy':n.autoencoder_accuracy, 'autoencoder_false_neg_rate':n.autoencoder_false_neg_rate}
 else:
 	custom_objects_dict = {'sparse_top10_accuracy': n.sparse_top10_accuracy, 'sparse_top30_accuracy': n.sparse_top30_accuracy}
+
 model = tf.keras.models.load_model(os.path.join(save_path, 'model.h5'), custom_objects=custom_objects_dict)
 
 #%%[markdown]
@@ -163,8 +175,32 @@ else:
 	verbose=1
 
 #%%
-results = model.evaluate_generator(eval_generator, verbose=verbose)
-predictions = model.predict_generator(eval_generator, verbose=verbose)
+if param.MODE == 'retrospective-gan':
+	gan_encoder = model.layers[1]
+	gan_decoder = model.layers[2]
+	gan_feature_extractor = model.layers[3]
+	# Custom evaluation loop
+	g_eval_losses = []
+	g_eval_predictions = []
+	for batch_idx  in tqdm(range(len(eval_generator))):
+		batch_data_X, batch_data_y = eval_generator.__getitem__(batch_idx)
+		ones_label = np.ones((len(batch_data_X['pse_input']),1))
+		latent_repr = gan_encoder.predict(batch_data_X['pse_input'])
+		reconstructed = gan_decoder.predict(latent_repr)
+		feature_extracted = gan_feature_extractor.predict(reconstructed)
+
+		g_loss = model.test_on_batch(batch_data_X['pse_input'], [batch_data_y['main_output'], feature_extracted, ones_label, latent_repr])
+
+		g_eval_losses.append(g_loss)
+		g_eval_predictions.append(reconstructed)
+
+	results = np.array(g_eval_losses)
+	predictions = np.vstack(g_eval_predictions)
+	results = np.mean(g_eval_losses, axis=0)
+
+else:
+	results = model.evaluate_generator(eval_generator, verbose=verbose)
+	predictions = model.predict_generator(eval_generator, verbose=verbose)
 
 #%%[markdown]
 # ### Compute and print evaluation metrics
@@ -177,7 +213,7 @@ for metric, result in zip(model.metrics_names, results):
 	print('Metric: {}   Score: {:.5f}'.format(metric,result))
 
 #%%
-if param.MODE == 'retrospective-autoenc':
+if param.MODE in ['retrospective-autoenc', 'retrospective-gan']:
 	prediction_label_matrix = (predictions >= 0.5) * 1
 	prediction_labels = le.inverse_transform(prediction_label_matrix)
 	pl_series = pd.Series(chain.from_iterable(prediction_labels))
@@ -210,6 +246,7 @@ print('Micro average recall score for present labels: {:.3f}'.format(r_we))
 #%%
 department_data = pd.read_csv(os.path.join(os.getcwd(), 'data', 'depas.csv'), sep=';')
 department_data.set_index('orig_depa', inplace=True)
+department_data.fillna('', inplace=True)
 department_cat_dict = department_data['cat_depa'].to_dict()
 # Account for errors in data
 department_cat_dict['null'] = 'null'
@@ -220,10 +257,12 @@ unique_categorized_departments = list(set(categorized_departments))
 #%%
 # Compute evaluation metrics by department as a proxy for patient
 # category. Make a dataframe with this.
-if param.MODE == 'retrospective-autoenc':
+if param.MODE in ['retrospective-autoenc', 'retrospective-gan']:
 	results_by_depa_dict = {
 		'Department':[],
-		'Autoencoder accuracy':[]
+		'Area under precision-recall': [],
+		'Autoencoder accuracy': [],
+		'Autoencoder false negative rate': [],
 	}
 else:
 	results_by_depa_dict = {
@@ -240,28 +279,61 @@ for department in unique_categorized_departments:
 		continue
 	print('\n\nResults for category: {}'.format(department))
 	indices = [i for i, value in enumerate(categorized_departments) if value == department]
-	selected_pre_seqs = [filtered_pre_seqs[i] for i in indices]
 	if param.MODE == 'retrospective':
+		selected_pre_seqs = [filtered_pre_seqs[i] for i in indices]
 		selected_post_seqs = [filtered_post_seqs[i] for i in indices]
-	elif param.MODE == 'prospective' or param.MODE == 'retrospective-autoenc':
+	elif param.MODE == 'prospective':
+		selected_pre_seqs = [filtered_pre_seqs[i] for i in indices]
+		selected_post_seqs = []
+	elif param.MODE in ['retrospective-autoenc', 'retrospective-gan']:
+		selected_pre_seqs = []
 		selected_post_seqs = []
 	selected_active_meds = [filtered_active_meds[i] for i in indices]
-	if len(filtered_active_classes) > 0:
+	try:
 		selected_active_classes = [filtered_active_classes[i] for i in indices]
-	else:
+	except:
 		selected_active_classes = []
 	selected_depa = [filtered_depas[i] for i in indices]
 	selected_targets = [filtered_targets[i] for i in indices]
 	if len(selected_targets) < 10:
 		continue
 	eval_generator = TransformedGenerator(param.MODE, w2v_step, param.USE_LSI, pse, le, selected_targets, selected_pre_seqs, selected_post_seqs, selected_active_meds, selected_active_classes, selected_depa, param.W2V_EMBEDDING_DIM, param.SEQUENCE_LENGTH, param.BATCH_SIZE)
-	results = model.evaluate_generator(eval_generator, verbose=1)
-	predictions = model.predict_generator(eval_generator, verbose=1)
-	if param.MODE == 'retrospective-autoenc':
+	if param.MODE == 'retrospective-gan':
+		g_eval_losses = []
+		g_eval_predictions = []
+		for batch_idx  in tqdm(range(len(eval_generator))):
+			batch_data_X, batch_data_y = eval_generator.__getitem__(batch_idx)
+			ones_label = np.ones((len(batch_data_X['pse_input']),1))
+			latent_repr = gan_encoder.predict(batch_data_X['pse_input'])
+			reconstructed = gan_decoder.predict(latent_repr)
+			feature_extracted = gan_feature_extractor.predict(reconstructed)
+
+			g_loss = model.test_on_batch(batch_data_X['pse_input'], [batch_data_y['main_output'], feature_extracted, ones_label, latent_repr])
+
+			g_eval_losses.append(g_loss)
+			g_eval_predictions.append(reconstructed)
+
+		results = np.array(g_eval_losses)
+		predictions = np.vstack(g_eval_predictions)
+		results = np.mean(g_eval_losses, axis=0)
+	else:
+		results = model.evaluate_generator(eval_generator, verbose=1)
+		predictions = model.predict_generator(eval_generator, verbose=1)
+	if param.MODE in ['retrospective-autoenc', 'retrospective-gan']:
+		if param.MODE == 'retrosective-autoenc':
+			aupr_index = 2
+			accuracy_index = 1
+			false_neg_index = 3
+		elif param.MODE == 'retrospective-gan':
+			aupr_index = 6
+			accuracy_index = 5
+			false_neg_index = 7
 		for metric, result in zip(model.metrics_names, results):
 			print('Metric: {}   Score: {:.5f}'.format(metric,result))
 		results_by_depa_dict['Department'].append(department)
-		results_by_depa_dict['Autoencoder accuracy'].append(results[1])
+		results_by_depa_dict['Area under precision-recall'].append(results[aupr_index])
+		results_by_depa_dict['Autoencoder accuracy'].append(results[accuracy_index])
+		results_by_depa_dict['Autoencoder false negative rate'].append(results[false_neg_index])
 		prediction_label_matrix = (predictions >= 0.5) * 1
 		prediction_labels = le.inverse_transform(prediction_label_matrix)
 		p_we, r_we, _, _ = precision_recall_fscore_support(le.transform(selected_targets), prediction_label_matrix, average='micro')
@@ -324,8 +396,8 @@ for department in unique_categorized_departments:
 # Visualize the prediction results by department
 results_by_depa_df = pd.DataFrame(results_by_depa_dict)
 results_by_depa_df.set_index('Department', inplace=True)
-if param.MODE == 'retrospective-autoenc':
-	sort_string = 'Autoencoder accuracy'
+if param.MODE in ['retrospective-autoenc', 'retrospective-gan']:
+	sort_string = 'Autoencoder false negative rate'
 else:
 	sort_string = 'Top 1 accuracy'
 results_by_depa_df.sort_values(by=sort_string, inplace=True)
