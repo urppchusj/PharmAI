@@ -146,10 +146,8 @@ class preprocessor():
         for addition in enc[1].itertuples():
             # For each addition, generate a profile of all medications with a datetime of beginning
             # before or at the same time of the addition
-            if self.mode == 'retrospective':
-                # In retrospective mode, generate profiles only when no drug
-                # was added for 1 hour, representing a "stable" profile for
-                # retrospective analysis of all drugs in the profile
+            if self.mode in ['retrospective', 'retrospective-autoenc']:
+                # In retrospective or retrospective-autoenc mode, generate profiles only when no drug was added for 1 hour, representing a "stable" profile for retrospective analysis of all drugs in the profile
                 cur_add_time = addition.datetime_beg
                 if addition.Index[1] == max_enc:
                     pass
@@ -167,7 +165,7 @@ class preprocessor():
                 i='profile', j='addition_number')
             enc_profiles_list.append(profile_at_time)
             # Used by retrospective mode to calculate how much time elapsed since last addition.
-            if self.mode == 'retrospective':
+            if self.mode in ['retrospective', 'retrospective-autoenc']:
                 prev_add_time = cur_add_time
         enc_profiles = pd.concat(enc_profiles_list)
         return enc_profiles
