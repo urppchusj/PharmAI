@@ -653,9 +653,17 @@ class neural_network:
     Functions related to the neural network
     '''
 
-    def __init__(self, mode):
+    def __init__(self, mode, l1l2ratio=0):
         # Define the neural network mode (prospective or retrospective)
         self.mode = mode
+        # Store the l1l2ratio for use by custom loss
+        self.l1l2ratio = dtypes.cast(constant(l1l2ratio), float32)
+
+    # Custom losses
+    def combined_l1l2loss(self, y_true, y_pred):
+        l1loss = keras.losses.MAE(y_true, y_pred)
+        l2loss = keras.losses.MSE(y_true, y_pred)
+        return math.add(math.multiply(self.l1l2ratio, l1loss), math.multiply(math.subtract(dtypes.cast(constant(1), float32), self.l1l2ratio), l2loss))
 
     # Custom accuracy metrics
     def sparse_top10_accuracy(self, y_true, y_pred):
@@ -880,13 +888,17 @@ class neural_network:
         print(model.summary())
         return model
 
-    def gan_encoder(self, n_enc_dec_blocks, autoenc_max_size, autoenc_size_ratio, autoenc_squeeze_size, pse_shape, dropout):
+    def gan_encoder(self, n_enc_dec_blocks, autoenc_max_size, autoenc_size_ratio, autoenc_squeeze_size, pse_shape, dropout, activation_type):
 
         Dense = keras.layers.Dense
         Dropout = keras.layers.Dropout
-        #BatchNormalization = keras.layers.BatchNormalization
         Input = keras.layers.Input
-        ReLU = keras.layers.ReLU
+        if activation_type == 'ReLU':
+            activation = 'relu'
+            initializer = 'glorot_uniform'
+        elif activation_type == 'SELU':
+            activation = 'selu'
+            initializer = 'lecun_normal'
         Model = keras.models.Model
 
         # Input
@@ -894,14 +906,10 @@ class neural_network:
                           dtype='float32', name='pse_input')
         
         # Encoder
-        encoded = Dense(autoenc_max_size)(pse_input)
-        #encoded = BatchNormalization()(encoded)
-        encoded = ReLU()(encoded)
+        encoded = Dense(autoenc_max_size, activation=activation, kernel_initializer=initializer)(pse_input)
         encoded = Dropout(dropout)(encoded)
         for n in range(n_enc_dec_blocks-1):
-            encoded = Dense(autoenc_max_size//(autoenc_size_ratio**(n+1)))(encoded)
-            #encoded = BatchNormalization()(encoded)
-            encoded = ReLU()(encoded)
+            encoded = Dense(autoenc_max_size//(autoenc_size_ratio**(n+1)), activation=activation, kernel_initializer=initializer)(encoded)
             encoded = Dropout(dropout)(encoded)
         
         '''
@@ -916,25 +924,25 @@ class neural_network:
 
         return Model(pse_input, latent_repr)
     
-    def gan_decoder(self, n_enc_dec_blocks, autoenc_max_size, autoenc_size_ratio, autoenc_squeeze_size, pse_shape, dropout):
+    def gan_decoder(self, n_enc_dec_blocks, autoenc_max_size, autoenc_size_ratio, autoenc_squeeze_size, pse_shape, dropout, activation_type):
 
         Dense = keras.layers.Dense
         Input = keras.layers.Input
         Dropout = keras.layers.Dropout
-        #BatchNormalization = keras.layers.BatchNormalization
-        ReLU = keras.layers.ReLU
+        if activation_type == 'ReLU':
+            activation = 'relu'
+            initializer = 'glorot_uniform'
+        elif activation_type == 'SELU':
+            activation = 'selu'
+            initializer = 'lecun_normal'
         Model = keras.models.Model
 
         z = Input(shape=(autoenc_squeeze_size,))
         # Decoder
-        decoded = Dense(autoenc_max_size//(autoenc_size_ratio**(n_enc_dec_blocks-1)))(z)
-        #decoded = BatchNormalization()(decoded)
-        decoded = ReLU()(decoded)
+        decoded = Dense(autoenc_max_size//(autoenc_size_ratio**(n_enc_dec_blocks-1)), activation=activation, kernel_initializer=initializer)(z)
         decoded = Dropout(dropout)(decoded)
         for n in range(n_enc_dec_blocks-1):
-            decoded = Dense(autoenc_max_size//(autoenc_size_ratio**(n_enc_dec_blocks-(n+2))))(decoded)
-            #decoded = BatchNormalization()(decoded)
-            decoded = ReLU()(decoded)
+            decoded = Dense(autoenc_max_size//(autoenc_size_ratio**(n_enc_dec_blocks-(n+2))), activation=activation, kernel_initializer=initializer)(decoded)
             decoded = Dropout(dropout)(decoded)
         reconstructed = Dense(pse_shape, activation='sigmoid', name='main_output')(decoded)
 
@@ -963,15 +971,15 @@ class neural_network:
 
         return Model(candidate, encoded)
 
-    def aaa(self, n_enc_dec_blocks, autoenc_max_size, autoenc_size_ratio, autoenc_squeeze_size, feat_ext_n_blocks, feat_ext_size, pse_shape, dropout, loss_weights, disc_lr):
+    def aaa(self, n_enc_dec_blocks, autoenc_max_size, autoenc_size_ratio, autoenc_squeeze_size, feat_ext_n_blocks, feat_ext_size, pse_shape, dropout, loss_weights, disc_lr, activation_type):
 
         gan_feature_extractor = self.gan_feature_extractor(feat_ext_n_blocks, feat_ext_size, pse_shape, dropout)
         gan_feature_extractor.summary()
-        encoder = self.gan_encoder(n_enc_dec_blocks, autoenc_max_size, autoenc_size_ratio, autoenc_squeeze_size, pse_shape, dropout)
+        encoder = self.gan_encoder(n_enc_dec_blocks, autoenc_max_size, autoenc_size_ratio, autoenc_squeeze_size, pse_shape, dropout, activation_type)
         encoder.summary()
-        encoder2 = self.gan_encoder(n_enc_dec_blocks, autoenc_max_size, autoenc_size_ratio, autoenc_squeeze_size, pse_shape, dropout)
+        encoder2 = self.gan_encoder(n_enc_dec_blocks, autoenc_max_size, autoenc_size_ratio, autoenc_squeeze_size, pse_shape, dropout, activation_type)
         encoder2.summary()
-        decoder = self.gan_decoder(n_enc_dec_blocks, autoenc_max_size, autoenc_size_ratio, autoenc_squeeze_size, pse_shape, dropout)
+        decoder = self.gan_decoder(n_enc_dec_blocks, autoenc_max_size, autoenc_size_ratio, autoenc_squeeze_size, pse_shape, dropout, activation_type)
         decoder.summary()
 
         profile = keras.layers.Input(shape=(pse_shape,))
@@ -991,7 +999,7 @@ class neural_network:
         validity = gan_discriminator(profile)
 
         adversarial_autoencoder = keras.models.Model(profile, [reconstructed_profile, feature_extracted, validity, reconstructed_latent])
-        adversarial_autoencoder.compile(optimizer='Adam', loss=['binary_crossentropy', 'mse', 'binary_crossentropy', 'mse'], metrics=[[self.autoencoder_accuracy, metrics.AUC(num_thresholds=10, curve='PR', name='aupr'), self.autoencoder_false_neg_rate], 'mse', 'accuracy', 'mse'], loss_weights=loss_weights)
+        adversarial_autoencoder.compile(optimizer='Adam', loss=['binary_crossentropy', 'mse', 'binary_crossentropy', self.combined_l1l2loss], metrics=[[self.autoencoder_accuracy, metrics.AUC(num_thresholds=10, curve='PR', name='aupr'), self.autoencoder_false_neg_rate], 'mse', 'accuracy', self.combined_l1l2loss], loss_weights=loss_weights)
 
         adversarial_autoencoder.summary()
         
@@ -1331,5 +1339,22 @@ class visualization:
         else:
             plt.savefig(os.path.join(
                 save_path, 'cross_val_loss_history.png'))
+        # Clear
+        plt.gcf().clear()
+
+    def plot_encoder_loss(self, encoder_loss_dict, save_path):
+        encoder_loss_df = pd.DataFrame.from_dict(encoder_loss_dict, orient='index')
+        encoder_loss_df.rename(inplace=True, index=str, columns={'train_enc_losses':'Train encoder loss', 'val_enc_losses':'Val encoder loss'})
+        encoder_loss_df = encoder_loss_df.stack().reset_index().explode(0)
+        encoder_loss_df.rename(inplace=True, index=str, columns={'level_0':'Fold','level_1':'Metric',0:'Result'})
+        sns.set(style='darkgrid')
+        g = sns.FacetGrid(encoder_loss_df,col='Metric', row='Fold')
+        g.map(plt.hist,'Result')
+        # Output the plot
+        if self.in_ipynb:
+            plt.show()
+        else:
+            plt.savefig(os.path.join(
+                save_path, 'encoder_losses.png'))
         # Clear
         plt.gcf().clear()

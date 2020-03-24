@@ -79,7 +79,7 @@ except:
         'VAL_SPLIT_SEED':random_seed, # Seed to get identical splits when resuming training if KEEP_TIME_ORDER is False
         # True to do cross-val, false to do single training run with validation
 
-        'CROSS_VALIDATE': True,
+        'CROSS_VALIDATE': False,
         'N_CROSS_VALIDATION_FOLDS': 3,
         # validate when doing a single training run. Cross-validation has priority over this
         'VALIDATE': True,
@@ -137,9 +137,13 @@ except:
         'FEAT_EXT_SIZE':64,
         # Discriminator will be like the encoder part of the autoencoder but with a single node instead of the latent representation layer size
         # Loss weights are the relative weights of each loss in this order: contextual loss (binary), adversarial loss (mse), validity (must be zero) and encoder loss (mse)
-        'LOSS_WEIGHTS':[0.6, 0.3, 0, 0.1],
+        'LOSS_WEIGHTS':[100, 1, 0, 2],
         # Discriminator optimizer learning rate
         'DISC_LR':1e-6,
+        # L1L2 ratio for encoder loss in retrospective-gan mode. 1 is 100% l1, 0 is 100% l2
+        'L1L2RATIO':0.8,
+        # Activation type for encoder-decoder-encoder in retrospective-gan mode. Use SELU ou ReLU
+        'ACTIVATION_TYPE':'SELU',
 
         # Neural network training parameters,
         'BATCH_SIZE': 256,
@@ -148,6 +152,8 @@ except:
         'LEARNING_RATE_SCHEDULE':{8:1e-4, 11:1e-5}, # Dict where keys are epoch index (epoch - 1) where the learning rate decreases and values are the new learning rate. {14:1e-4} for local data retrospective. {} for mimic prospective.
         'N_TRAINING_STEPS_PER_EPOCH': None, # 1000 for retrospective, None for prospective (use whole generator)
         'N_VALIDATION_STEPS_PER_EPOCH': None, # 1000 for retrospective, None for prospective (use whole generator)
+        # For retrospective-gan mode, number of samples to use for evaluation of encoder loss distribution
+        'N_ENCODER_LOSS_SAMPLES':1000,
     }
     param = SimpleNamespace(**parameters_dict)
 
@@ -242,6 +248,9 @@ if param.CROSS_VALIDATE:
     loop_iters = param.N_CROSS_VALIDATION_FOLDS
 else:
     loop_iters = 1
+
+if param.MODE == 'retrospective-gan':
+    encoder_losses_dict = {}
 
 # %% [markdown]
 # ## Loop
@@ -347,9 +356,15 @@ for i in range(initial_fold, loop_iters):
         test_generator = None
         n_validation_steps_per_epoch = None
         training_epochs = param.SINGLE_RUN_EPOCHS
+    
+    if param.MODE == 'retrospective-gan':
+        sample_train_generator = TransformedGenerator(param.MODE, w2v_step, param.USE_LSI, pse, le, targets_train, pre_seq_train, post_seq_train,
+                                           active_meds_train, active_classes_train, depa_train, param.W2V_EMBEDDING_DIM, param.SEQUENCE_LENGTH, param.N_ENCODER_LOSS_SAMPLES)
+        sample_test_generator = TransformedGenerator(param.MODE, w2v_step, param.USE_LSI, pse, le, targets_test, pre_seq_test, post_seq_test,
+                                           active_meds_test, active_classes_test, depa_test, param.W2V_EMBEDDING_DIM, param.SEQUENCE_LENGTH, param.N_ENCODER_LOSS_SAMPLES)
 
     # Define the network and train
-    n = neural_network(param.MODE)
+    n = neural_network(param.MODE, param.L1L2RATIO)
 
     if param.MODE == 'retrospective-gan':
 
@@ -371,7 +386,7 @@ for i in range(initial_fold, loop_iters):
         else:
             gan_encoder, gan_decoder, gan_discriminator, gan_adv_autoencoder = n.aaa(param.N_ENC_DEC_BLOCKS, param.AUTOENC_MAX_SIZE, param.AUTOENC_SIZE_RATIO, param.AUTOENC_SQUEEZE_SIZE, pse_shape, param.DROPOUT)
         '''
-        gan_encoder, gan_decoder, gan_discriminator, gan_feature_extractor, gan_adv_autoencoder = n.aaa(param.N_ENC_DEC_BLOCKS, param.AUTOENC_MAX_SIZE, param.AUTOENC_SIZE_RATIO, param.AUTOENC_SQUEEZE_SIZE, param.FEAT_EXT_N_BLOCKS, param.FEAT_EXT_SIZE, pse_shape, param.DROPOUT, param.LOSS_WEIGHTS, param.DISC_LR)
+        gan_encoder, gan_decoder, gan_discriminator, gan_feature_extractor, gan_adv_autoencoder = n.aaa(param.N_ENC_DEC_BLOCKS, param.AUTOENC_MAX_SIZE, param.AUTOENC_SIZE_RATIO, param.AUTOENC_SQUEEZE_SIZE, param.FEAT_EXT_N_BLOCKS, param.FEAT_EXT_SIZE, pse_shape, param.DROPOUT, param.LOSS_WEIGHTS, param.DISC_LR, param.ACTIVATION_TYPE)
 
         if (param.CROSS_VALIDATE == True and i == 0) or (param.CROSS_VALIDATE == False):
             tf.keras.utils.plot_model(
@@ -430,9 +445,29 @@ for i in range(initial_fold, loop_iters):
             print('\n'.join(['{} : {:.5f}'.format(name,metric) for name,metric in zip(all_names, all_losses)]))
             print('\n')
 
+            # Compute the encoder loss distribution
+
+            print('SAMPLING ENCODER LOSSES ON TRAINING SET...')
+            g_sampled_losses = []
+            batch_data_X, batch_data_y = sample_train_generator.__getitem__(0)
+            samples_X = batch_data_X['pse_input']
+            samples_y = batch_data_y['main_output']
+            
+            for sample_x, sample_y in tqdm(zip(samples_X, samples_y)):
+                ones_label = np.ones(1)
+                latent_repr = gan_encoder.predict(sample_x)
+                feature_extracted = gan_feature_extractor.predict(gan_decoder.predict(latent_repr))
+
+                g_loss = gan_adv_autoencoder.test_on_batch(sample_x.reshape(1,-1), [sample_y.reshape(1,-1), feature_extracted, ones_label, latent_repr])
+
+                g_sampled_losses.append(g_loss)
+            
+            g_sampled_losses = np.array(g_sampled_losses)
+            encoder_losses = g_sampled_losses[:,[4]].squeeze()
+            
             # Test data
+            g_val_losses = []
             if param.CROSS_VALIDATE or param.VALIDATE:
-                g_val_losses = []
 
                 print('VALIDATION...')
                 for batch_idx  in tqdm(range(len(test_generator))):
@@ -457,36 +492,26 @@ for i in range(initial_fold, loop_iters):
 
                 all_names = all_names + val_names
                 all_losses = np.hstack((all_losses, g_val_losses)).tolist()
-                '''
-                # Sample n fake profiles
-                n_profiles = 3
                 
-                fake_reconsts = gan_decoder.predict(np.random.normal(size=(n_profiles, param.AUTOENC_SQUEEZE_SIZE)))
-                fake_reconst_matrix = (fake_reconsts >= 0.5) * 1
-                fake_reconst_labels = le.inverse_transform(fake_reconst_matrix)
-                fake_profiles = [[definitions[med] for med in profile] for profile in fake_reconst_labels]
-                print('These profiles do not exist:\n')
-                for profile in fake_profiles:
-                    profile.sort()
-                    print('Profile: \n{}'.format(profile))
-                print('\n\n')
-                
-                # Test n reconstructions
+                # Compute the encoder loss distribution
 
-                sampled_profiles = random.sample(active_meds_test, n_profiles)
-                transformed_profiles = pse.transform([[bp] for bp in sampled_profiles]).todense()
-                reconstructed = gan_decoder.predict(gan_encoder.predict(transformed_profiles))
-                reconst_matrix = (reconstructed >= 0.5) * 1
-                reconstructed_labels = le.inverse_transform(reconst_matrix)
-                reconstructed_profiles = [[definitions[med] for med in profile] for profile in reconstructed_labels]
-                orig_profiles = [[definitions[med] for med in profile] for profile in sampled_profiles]
-                atypical_meds = [[definitions[med] for med in orig_profile if med not in reconst_profile] for orig_profile, reconst_profile in zip(sampled_profiles, reconstructed_labels)]
-                print('These profiles do exist:\n')
-                for profile, atypical_med in zip(orig_profiles, atypical_meds):
-                    profile.sort()
-                    atypical_med.sort()
-                    print('Profile: \n{}\nAtypicals: \n{}\n'.format(profile, atypical_med))
-                '''
+                print('SAMPLING ENCODER LOSSES ON VALIDATION SET...')
+                g_val_sampled_losses = []
+                batch_data_X, batch_data_y = sample_test_generator.__getitem__(0)
+                samples_X = batch_data_X['pse_input']
+                samples_y = batch_data_y['main_output']
+                
+                for sample_x, sample_y in tqdm(zip(samples_X, samples_y)):
+                    ones_label = np.ones(1)
+                    latent_repr = gan_encoder.predict(sample_x)
+                    feature_extracted = gan_feature_extractor.predict(gan_decoder.predict(latent_repr))
+
+                    g_loss = gan_adv_autoencoder.test_on_batch(sample_x.reshape(1,-1), [sample_y.reshape(1,-1), feature_extracted, ones_label, latent_repr])
+
+                    g_val_sampled_losses.append(g_loss)
+                
+                g_val_sampled_losses = np.array(g_val_sampled_losses)
+                encoder_val_losses = g_val_sampled_losses[:,[4]].squeeze()
 
                 continue_check = c.gan_continue_check(val_monitor_losses,epoch)
                 if 'early_stop' in continue_check:
@@ -494,7 +519,12 @@ for i in range(initial_fold, loop_iters):
                 elif 'reduce_lr' in continue_check:
                     cur_lr = gan_adv_autoencoder.optimizer.lr.numpy()
                     keras.backend.set_value(gan_adv_autoencoder.optimizer.lr, cur_lr/10)
-                    
+                
+            if (param.VALIDATE or param.CROSS_VALIDATE) and epoch == c.absolute_min_loss_epoch:
+                encoder_losses_dict[i] = {'train_enc_losses':encoder_losses, 'val_enc_losses':encoder_val_losses}
+                with open(os.path.join(save_path, 'encoder_losses.pkl'), mode='wb') as file:
+                    pickle.dump(encoder_losses_dict,file)
+
             epoch_results_df = pd.DataFrame.from_dict(
                 {epoch: dict(zip(all_names, all_losses))}, orient='index')
             epoch_results_df['epoch']=epoch
@@ -531,6 +561,9 @@ for i in range(initial_fold, loop_iters):
                     save_path, 'cv_results.csv'), mode='a', header=False)
         # Else save the models
         else:
+            encoder_losses_dict = {i:{'train_enc_losses':encoder_losses, 'val_enc_losses':encoder_val_losses}}
+            with open(os.path.join(save_path, 'encoder_losses.pkl'), mode='wb') as file:
+                pickle.dump(encoder_losses_dict,file)
             gan_discriminator.save(os.path.join(save_path, 'discriminator.h5'), save_format='tf')
             gan_adv_autoencoder.save(os.path.join(save_path, 'model.h5'), save_format='tf')
 
@@ -618,6 +651,10 @@ v = visualization()
 
 # If cross-validating, plot evaluation metrics (best epoch)
 # by fold. Else, plot training history by epoch.
+if param.MODE == 'retrospective-gan':
+    with open(os.path.join(save_path, 'encoder_losses.pkl'), mode='rb') as file:
+        encoder_loss_dict = pickle.load(file)
+
 if param.CROSS_VALIDATE:
     plotting_df = pd.read_csv(os.path.join(save_path, 'cv_results.csv'))
     if param.MODE == 'retrospective-gan':
@@ -633,6 +670,7 @@ if param.CROSS_VALIDATE:
         })
         v.plot_crossval_autoenc_accuracy_history(plotting_df, save_path)
         v.plot_crossval_gan_discacc_history(plotting_df, save_path)
+        v.plot_encoder_loss(encoder_loss_dict, save_path)
     elif param.MODE == 'retrospective-autoenc':
         v.plot_crossval_autoenc_accuracy_history(plotting_df, save_path)
         v.plot_crossval_loss_history(plotting_df, save_path)
@@ -654,6 +692,7 @@ elif param.VALIDATE:
         })
         v.plot_autoenc_accuracy_history(plotting_df, save_path)
         v.plot_gan_discacc_history(plotting_df, save_path)
+        v.plot_encoder_loss(encoder_loss_dict, save_path)
     elif param.MODE == 'retrospective-autoenc':
         v.plot_autoenc_accuracy_history(plotting_df, save_path)
         v.plot_loss_history(plotting_df, save_path)
