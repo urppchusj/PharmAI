@@ -136,13 +136,14 @@ class data:
                 random.sample(range(len(self.enc)), restrict_sample_size))]
             with open(os.path.join(save_path, 'sampled_encs.pkl'), mode='wb') as file:
                 pickle.dump(self.enc, file)
-        # THE FOLLOWING ELIF IS INCOMPLETE AND NOT PROPERLY IMPLEMENTED
+        # THE FOLLOWING ELIF IS INCOMPLETE, ONLY RESTRICTS ACTIVE_MEDS AND DEPAS
         # TODO COMPLETE RESTRICTED DATA FOR SPLIT BY YEAR MODE
         elif restrict_data and self.split_by_mode=='year':
             print('Data restriction flag enabled under split by year, sampling {} encounters for each year...'.format(
                 restrict_sample_size))
             random.seed(seed)
-            self.sampled_indices = {k:sorted(random.sample(range(len(v)), restrict_sample_size)) for k,v in self.targets.items()}
+            self.active_meds = {k:v[:restrict_sample_size] for k,v in self.active_meds.items()}
+            self.depas = {k:v[:restrict_sample_size] for k,v in self.depas.items()}
 
         if get_definitions:
             # Build a dict mapping drug ids to their names
@@ -306,7 +307,7 @@ class data:
 
     # This is only implemented for retrospective-autoenc and retrospective-gan modes for now
     # TODO implement for other modes
-    def make_lists_by_year(self, train_years=None, valid_years=None, shuffle_train_set=True):
+    def make_lists_by_year(self, train_years=None, valid_years=None, shuffle_train_set=True, shuffle_val_set=False):
         print('Building data lists...')
 
         # Training set
@@ -338,6 +339,13 @@ class data:
             shuffled = list(zip(self.active_meds_train, self.depa_train))
             random.shuffle(shuffled)
             self.active_meds_train, self.depa_train = zip(*shuffled)
+
+        if shuffle_val_set:
+            # Initial shuffle of training set
+            print('Shuffling training set...')
+            shuffled = list(zip(self.active_meds_val, self.depa_val))
+            random.shuffle(shuffled)
+            self.active_meds_val, self.depa_val = zip(*shuffled)
 
        # Print out the number of samples obtained to make sure they match.
         print('Training set: Obtained {} active profiles and {} depas'.format(
@@ -1003,7 +1011,7 @@ class neural_network:
 
         adversarial_autoencoder.summary()
         
-        return encoder, decoder, gan_discriminator, gan_feature_extractor, adversarial_autoencoder
+        return encoder, encoder2, decoder, gan_discriminator, gan_feature_extractor, adversarial_autoencoder
 
 class gan_continue_checker:
 
