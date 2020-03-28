@@ -40,7 +40,7 @@ warnings.filterwarnings('ignore',category=UserWarning)
 # Save path and parameter loading
 
 # Empty string to start training a new model, else will load parameters from this directory; will start a new model if can't load.
-LOAD_FROM = '20200324-2245'
+LOAD_FROM = ''
 
 # Check if can load hyperparameters from specified dir, else create new dir
 try:
@@ -503,7 +503,8 @@ for i in range(initial_fold, loop_iters):
                 print('SAMPLING ENCODER LOSSES ON VALIDATION SET...')
                 g_val_sampled_losses = []
                 feature_extracted_samples = []
-                encoded_vectors_diff = []
+                encoded_vectors_latent = []
+                encoded_vectors_latent2 = []
                 
                 for sample_x, sample_y in tqdm(zip(samples_X_val, samples_y_val)):
                     ones_label = np.ones(1)
@@ -513,14 +514,16 @@ for i in range(initial_fold, loop_iters):
                     feature_extracted = gan_feature_extractor.predict(reconst)
 
                     feature_extracted_samples.append(feature_extracted)
-                    encoded_vectors_diff.append(latent_from_reconst - latent_repr)
+                    encoded_vectors_latent.append(latent_repr)
+                    encoded_vectors_latent2.append(latent_from_reconst)
 
                     g_loss = gan_adv_autoencoder.test_on_batch(sample_x.reshape(1,-1), [sample_y.reshape(1,-1), feature_extracted, ones_label, latent_repr])
 
                     g_val_sampled_losses.append(g_loss)
                 
                 feature_extracted_samples = np.array(feature_extracted_samples)
-                encoded_vectors_diff = np.array(encoded_vectors_diff)
+                encoded_vectors_latent = np.array(encoded_vectors_latent)
+                encoded_vectors_latent2 = np.array(encoded_vectors_latent2)
                 g_val_sampled_losses = np.array(g_val_sampled_losses)
                 encoder_val_losses = g_val_sampled_losses[:,[4]].squeeze()
 
@@ -560,7 +563,8 @@ for i in range(initial_fold, loop_iters):
                 with open(os.path.join(save_path, 'leaderboard_fold_{}.txt'.format(i)), mode='a', encoding='utf-8') as file:
                     file.write(output_string)
                 joblib.dump(feature_extracted_samples, os.path.join(save_path, 'feature_extracted_samples_fold_{}.joblib'.format(i)))
-                joblib.dump(encoded_vectors_diff, os.path.join(save_path, 'encoded_vectors_diff_fold_{}.joblib'.format(i)))
+                joblib.dump(encoded_vectors_latent, os.path.join(save_path, 'encoded_vectors_latent_fold_{}.joblib'.format(i)))
+                joblib.dump(encoded_vectors_latent2, os.path.join(save_path, 'encoded_vectors_latent2_fold_{}.joblib'.format(i)))
                 gan_discriminator.save(os.path.join(save_path, 'discriminator_fold_{}.h5'.format(i)), save_format='tf')
                 gan_adv_autoencoder.save(os.path.join(save_path, 'model_fold_{}.h5'.format(i)), save_format='tf')
 
