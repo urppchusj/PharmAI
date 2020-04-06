@@ -513,6 +513,8 @@ class TransformedGenerator(keras.utils.Sequence):
         self.w2v = w2v
         self.use_lsi = use_lsi
         self.pse = pse
+        self.pse_shape = sum([len(transformer[1].vocabulary_)
+                             for transformer in self.pse.named_steps['columntrans'].transformers_])
         self.le = le
         # Data
         self.y = y
@@ -601,12 +603,15 @@ class TransformedGenerator(keras.utils.Sequence):
             else:
                 batch_pse = [[bp] for bp in batch_am]
         # Transform
-        transformed_pse = self.pse.transform(batch_pse)
-        X['pse_input'] = transformed_pse
+        try:
+            transformed_pse = self.pse.transform(batch_pse)
+            if self.use_lsi == False:
+                transformed_pse = transformed_pse.todense()
+        except:
+            transformed_pse = np.zeros((self.batch_size, self.pse_shape))
         # Output of the pipeline is a sparse matrix, convert to dense only if inputting
         # as multi hot. If using LSI, transformation pipeling will generate dense matrix.
-        if self.use_lsi == False:
-            X['pse_input'] = X['pse_input'].todense()
+        X['pse_input'] = transformed_pse
         if self.return_targets:
             # Get a batch
             batch_y = self.y[idx * self.batch_size:(idx+1) * self.batch_size]
