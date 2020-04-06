@@ -71,18 +71,18 @@ except:
         'SPLIT_MODE':'year',
 
         # Parameters for year split modes
-        'NUM_TRAINING_YEARS':10,
-        'MAX_YEAR_IN_SET':2017,
+        'NUM_TRAINING_YEARS':11,
+        'MAX_YEAR_IN_SET':2020,
 
         # Keep chronological sequence when splitting for validation
         'KEEP_TIME_ORDER':True, # True for local dataset, False for mimic, no effect for year split mode
         'VAL_SPLIT_SEED':random_seed, # Seed to get identical splits when resuming training if KEEP_TIME_ORDER is False
         # True to do cross-val, false to do single training run with validation
 
-        'CROSS_VALIDATE': True,
+        'CROSS_VALIDATE': False,
         'N_CROSS_VALIDATION_FOLDS': 3,
         # validate when doing a single training run. Cross-validation has priority over this
-        'VALIDATE': True,
+        'VALIDATE': False,
 
         # Data parameters
         # False prepares all data, True samples a number of encounters for faster execution, useful for debugging or testing
@@ -148,7 +148,7 @@ except:
         # Neural network training parameters,
         'BATCH_SIZE': 256,
         'MAX_TRAINING_EPOCHS':1000, # Default 1000, should never get there, reduce for faster execution when testing or debugging.
-        'SINGLE_RUN_EPOCHS':12, # How many epochs to train when doing a single run without validation. 16 for local retrospective. 7 for mimic prospective.
+        'SINGLE_RUN_EPOCHS':21, # How many epochs to train when doing a single run without validation. 16 for local retrospective. 7 for mimic prospective.
         'LEARNING_RATE_SCHEDULE':{8:1e-4, 11:1e-5}, # Dict where keys are epoch index (epoch - 1) where the learning rate decreases and values are the new learning rate. {14:1e-4} for local data retrospective. {} for mimic prospective.
         'N_TRAINING_STEPS_PER_EPOCH': None, # 1000 for retrospective, None for prospective (use whole generator)
         'N_VALIDATION_STEPS_PER_EPOCH': None, # 1000 for retrospective, None for prospective (use whole generator)
@@ -598,7 +598,7 @@ for i in range(initial_fold, loop_iters):
                     save_path, 'cv_results.csv'), mode='a', header=False)
         # Else save the models
         else:
-            encoder_losses_dict = {i:{'train_enc_losses':encoder_losses, 'val_enc_losses':encoder_val_losses}}
+            encoder_losses_dict = {i:{'train_enc_losses':encoder_losses}}
             with open(os.path.join(save_path, 'encoder_losses.pkl'), mode='wb') as file:
                 pickle.dump(encoder_losses_dict,file)
             gan_discriminator.save(os.path.join(save_path, 'discriminator.h5'), save_format='tf')
